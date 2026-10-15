@@ -1,0 +1,145 @@
+swagger: "2.0"
+info:
+  title: acs-gateway
+  description: Autonomous Commerce Suite front door (API Gateway -> ACS Orchestrator on Cloud Run)
+  version: "1.0.0"
+schemes:
+  - https
+produces:
+  - application/json
+x-google-endpoints:
+  - name: ${managed_service}
+    allowCors: true
+# Every route goes to the private orchestrator. The gateway authenticates to Cloud Run with
+# its own service account (jwt_audience) and moves the caller's Authorization header to
+# X-Forwarded-Authorization; the orchestrator re-verifies that credential.
+x-google-backend:
+  address: ${backend}
+  jwt_audience: ${backend}
+  path_translation: APPEND_PATH_TO_ADDRESS
+  deadline: 300.0
+securityDefinitions:
+  firebase:
+    type: oauth2
+    flow: implicit
+    authorizationUrl: ""
+    x-google-issuer: "https://securetoken.google.com/${project_id}"
+    x-google-jwks_uri: "https://www.googleapis.com/service_accounts/v1/metadata/x509/securetoken@system.gserviceaccount.com"
+    x-google-audiences: "${project_id}"
+  api_key:
+    type: apiKey
+    name: x-api-key
+    in: header
+  api_key_query:
+    type: apiKey
+    name: key
+    in: query
+paths:
+  # ------------------------------------------------------------------ public discovery
+  /.well-known/ucp:
+    get:
+      operationId: ucpProfile
+      security: []
+      responses: {"200": {description: UCP business profile}}
+  /ucp/v1/schemas/refund_request.json:
+    get:
+      operationId: ucpRefundSchema
+      security: []
+      responses: {"200": {description: JSON schema}}
+  /a2a/.well-known/agent-card.json:
+    get:
+      operationId: a2aAgentCard
+      security: []
+      responses: {"200": {description: A2A agent card}}
+  # ------------------------------------------------------------------ AI shopper agents
+  /ucp/v1/refunds:
+    post:
+      operationId: ucpRefund
+      security: [{api_key: []}]
+      responses: {"200": {description: Refund decision}}
+  # Path templates cannot end in "/", so forward POST /a2a to the backend's /a2a/ route.
+  /a2a:
+    post:
+      operationId: a2aRpc
+      x-google-backend:
+        address: ${backend}/a2a/
+        jwt_audience: ${backend}
+        path_translation: CONSTANT_ADDRESS
+        deadline: 300.0
+      security: [{api_key: []}]
+      responses: {"200": {description: JSON-RPC response}}
+  # ------------------------------------------------------------------ merchant console
+  /v1/console/sessions:
+    get:
+      operationId: listSessions
+      security: [{firebase: []}]
+      responses: {"200": {description: Sessions}}
+    post:
+      operationId: createSession
+      security: [{firebase: []}]
+      responses: {"201": {description: Created}}
+  /v1/console/sessions/{session_id}:
+    delete:
+      operationId: deleteSession
+      security: [{firebase: []}]
+      parameters: [{name: session_id, in: path, required: true, type: string}]
+      responses: {"204": {description: Deleted}}
+  /v1/console/sessions/{session_id}/messages:
+    post:
+      operationId: sendMessage
+      security: [{firebase: []}]
+      parameters: [{name: session_id, in: path, required: true, type: string}]
+      responses: {"200": {description: Agent reply}}
+  /v1/audits:
+    post:
+      operationId: startAudit
+      security: [{firebase: []}]
+      responses: {"202": {description: Audit started}}
+  /v1/audits/{task_id}:
+    get:
+      operationId: getAudit
+      security: [{firebase: []}]
+      parameters: [{name: task_id, in: path, required: true, type: string}]
+      responses: {"200": {description: Audit status}}
+  /v1/policies/compile:
+    post:
+      operationId: compilePolicy
+      security: [{firebase: []}]
+      responses: {"200": {description: Draft rule set}}
+  /v1/policies/{draft_id}/deploy:
+    post:
+      operationId: deployPolicy
+      security: [{firebase: []}]
+      parameters: [{name: draft_id, in: path, required: true, type: string}]
+      responses: {"200": {description: Deployment result}}
+  /v1/refunds/decide:
+    post:
+      operationId: decideRefund
+      security: [{firebase: []}]
+      responses: {"200": {description: Refund decision}}
+  # ------------------------------------------------------------------ B2B inbox
+  /v1/intake/uploads:
+    post:
+      operationId: uploadPo
+      # Merchant users (Firebase) or B2B partners (API key + ACS client credential).
+      security: [{firebase: []}, {api_key: []}]
+      consumes: [multipart/form-data]
+      responses: {"202": {description: Queued}}
+  /v1/intake/webhook:
+    post:
+      operationId: webhookPo
+      security: [{api_key: []}]
+      responses: {"202": {description: Queued}}
+  /v1/intake/gmail-push:
+    post:
+      operationId: gmailPush
+      # Pub/Sub cannot send custom headers; the key rides in the push URL query string
+      # and the orchestrator verifies the Google-signed OIDC token.
+      security: [{api_key_query: []}]
+      responses: {"204": {description: Acknowledged}}
+  /v1/intake/{intake_id}:
+    get:
+      operationId: getIntake
+      security: [{firebase: []}]
+      parameters: [{name: intake_id, in: path, required: true, type: string}]
+      responses: {"200": {description: Intake status}}
