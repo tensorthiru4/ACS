@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "public": "../console/dist",
+    "public": "hosting",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "cleanUrls": true,
     "trailingSlash": false,

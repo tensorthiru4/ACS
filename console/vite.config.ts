@@ -20,7 +20,8 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
-    build: { outDir: "dist", sourcemap: false },
+    // Firebase Hosting only serves directories inside firebase/ (where firebase.json lives).
+    build: { outDir: "../firebase/hosting", emptyOutDir: true, sourcemap: false },
     test: { environment: "node" },
   };
 });

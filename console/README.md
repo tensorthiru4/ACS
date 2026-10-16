@@ -21,7 +21,7 @@ cp .env.example .env.local   # VITE_FIREBASE_* from Firebase project settings; V
 npm install
 npm run dev                  # http://localhost:5173; /api is proxied to the gateway (no CORS needed)
 npm test                     # vitest
-npm run build                # typecheck + production bundle in dist/
+npm run build                # typecheck + production bundle in ../firebase/hosting/
 ```
 
 ## Deploy (Firebase Hosting)
@@ -32,7 +32,7 @@ cd ../firebase
 firebase deploy --only hosting --project <project-id>
 ```
 
-`firebase/firebase.json` serves `console/dist` with a strict CSP that allows only
+`npm run build` writes to `firebase/hosting/`, which `firebase/firebase.json` serves with a strict CSP that allows only
 `*.gateway.dev`, Firebase Auth and same-origin assets. The hosted origins must be listed in
 Terraform `console_origins` so the orchestrator's CORS accepts them.
 

@@ -238,3 +238,4 @@ console/node_modules/
 console/dist/
 console/.env.local
 !samples/*.pdf
+firebase/hosting/
