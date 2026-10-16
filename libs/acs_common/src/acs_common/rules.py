@@ -375,7 +375,12 @@ def _fact_json_type(kind: FactType) -> dict[str, Any]:
 
 
 def draft_json_schema(rule_set: str) -> dict[str, Any]:
-    """JSON Schema that Gemini's compiled policy must follow (structured output)."""
+    """JSON Schema that Gemini's compiled policy must follow (structured output).
+
+    Deliberately free of maxItems/minimum: Gemini rejects schemas whose bounded arrays of
+    complex items get too large to compile (a bare 400 INVALID_ARGUMENT). Limits are
+    enforced afterwards by `RuleSet` and the compiler.
+    """
     decision = {"type": "string", "enum": [d.value for d in Decision]}
     facts_schema = {
         "type": "object",
@@ -392,7 +397,7 @@ def draft_json_schema(rule_set: str) -> dict[str, Any]:
             "when": {"type": "string", "description": "CEL boolean expression over the facts"},
             "decision": decision,
             "reason": {"type": "string", "description": "Short reason shown to reviewers"},
-            "max_refund_minor": {"anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]},
+            "max_refund_minor": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
         },
         "required": ["id", "description", "when", "decision", "reason"],
     }
@@ -408,10 +413,10 @@ def draft_json_schema(rule_set: str) -> dict[str, Any]:
     return {
         "type": "object",
         "properties": {
-            "rules": {"type": "array", "items": rule, "maxItems": 50},
+            "rules": {"type": "array", "items": rule, "description": "At most 50 rules."},
             "default_decision": decision,
-            "test_cases": {"type": "array", "items": test_case, "maxItems": 12},
-            "assumptions": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
+            "test_cases": {"type": "array", "items": test_case, "description": "4 to 12 cases."},
+            "assumptions": {"type": "array", "items": {"type": "string"}},
         },
         "required": ["rules", "default_decision", "test_cases"],
     }

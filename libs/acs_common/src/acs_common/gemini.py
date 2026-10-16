@@ -58,9 +58,14 @@ async def generate_json(
     system: str,
     parts: list[Any],
     schema: dict[str, Any],
-    max_output_tokens: int = 8192,
+    max_output_tokens: int = 16384,
 ) -> dict[str, Any]:
-    """One schema-constrained generation. `parts` are genai Parts or strings."""
+    """One schema-constrained generation. `parts` are genai Parts or strings.
+
+    Gemini 3.x Flash "thinks" before answering and those tokens count against
+    `max_output_tokens`, so the budget is generous; a reply cut off at the limit is
+    reported as such rather than as malformed JSON.
+    """
     from google.genai import types
 
     config = types.GenerateContentConfig(
@@ -81,6 +86,10 @@ async def generate_json(
     try:
         value = json.loads(text)
     except ValueError as exc:
+        candidates = getattr(response, "candidates", None) or []
+        finish = str(getattr(candidates[0], "finish_reason", "")) if candidates else ""
+        if "MAX_TOKENS" in finish:
+            raise ModelError("model reply was cut off at the output-token limit") from exc
         raise ModelError("model returned invalid JSON") from exc
     if not isinstance(value, dict):
         raise ModelError("model returned a non-object JSON value")

@@ -42,6 +42,8 @@ locals {
       ACS_PUSH_CALLERS          = jsonencode([local.sa_email.pubsub_push])
       ACS_ORCHESTRATOR_CALLERS  = jsonencode([local.sa_email.orchestrator])
       ACS_DEFAULT_CURRENCY      = var.erp.default_currency
+      ACS_SKU_MAX_DISTANCE      = tostring(var.erp.sku_max_distance)
+      ACS_SKU_MIN_MARGIN        = tostring(var.erp.sku_min_margin)
       GOOGLE_GENAI_USE_VERTEXAI = "FALSE"
     }
   }

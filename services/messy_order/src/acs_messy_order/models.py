@@ -177,7 +177,6 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
         "ship_to": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "lines": {
             "type": "array",
-            "maxItems": 200,
             "items": {
                 "type": "object",
                 "properties": {
@@ -195,7 +194,7 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
         },
         "notes": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "confidence": {"type": "number", "description": "0..1, how sure you are overall"},
-        "warnings": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+        "warnings": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["is_purchase_order", "lines", "confidence"],
 }

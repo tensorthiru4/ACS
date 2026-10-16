@@ -249,3 +249,10 @@ def test_reject(h):
     assert response.status_code == 200
     assert h.repo.drafts[INTAKE_ID]["status"] == "rejected"
     assert review(h, "reject", {"merchant_id": "m1", "rejected_by": "x"}).status_code == 409
+
+
+def test_extraction_schema_avoids_constructs_gemini_rejects():
+    from acs_messy_order.models import EXTRACTION_SCHEMA
+
+    text = str(EXTRACTION_SCHEMA)
+    assert "maxItems" not in text and "minimum" not in text

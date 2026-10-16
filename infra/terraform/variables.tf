@@ -74,9 +74,13 @@ variable "erp" {
     # false: orders land in Odoo as quotations for a human to confirm.
     confirm_orders   = optional(bool, false)
     default_currency = optional(string, "USD")
+    # Vector SKU match: accept the nearest catalog item at or below this cosine distance
+    # when it leads the runner-up by at least the margin. Calibrate on your own catalog.
+    sku_max_distance = optional(number, 0.30)
+    sku_min_margin   = optional(number, 0.03)
   })
   default     = {}
-  description = "ERP Bridge + Safety Gate limits and the messy-order agent's default currency."
+  description = "ERP Bridge + Safety Gate limits and the messy-order agent's currency and SKU matching."
 }
 
 variable "billing_account" {

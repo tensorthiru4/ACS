@@ -38,9 +38,10 @@ class Settings(BaseSettings):
     # Matches the subscription's dead-letter policy; the last attempt marks the intake failed.
     max_delivery_attempts: int = 5
     # Cosine distance at or below which a vector match is accepted, and the gap required
-    # to the runner-up so near-ties go to a human.
-    sku_max_distance: float = 0.20
-    sku_min_margin: float = 0.02
+    # to the runner-up so near-ties go to a human. Calibrated on gemini-embedding-001 at
+    # 768 dims: true matches ~0.20-0.27, ambiguous near-ties < 0.01 apart.
+    sku_max_distance: float = 0.30
+    sku_min_margin: float = 0.03
     default_currency: str = "USD"
     downstream_timeout_s: float = 30.0
 

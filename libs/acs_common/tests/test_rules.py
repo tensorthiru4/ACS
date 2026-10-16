@@ -187,3 +187,20 @@ def test_draft_schema_lists_rule_set_facts():
     facts = schema["properties"]["test_cases"]["items"]["properties"]["facts"]["properties"]
     assert "unmatched_line_count" in facts
     assert "requested_amount_minor" not in facts
+
+
+def _keys(value):
+    if isinstance(value, dict):
+        for k, v in value.items():
+            yield k
+            yield from _keys(v)
+    elif isinstance(value, list):
+        for v in value:
+            yield from _keys(v)
+
+
+def test_draft_schema_avoids_constructs_gemini_rejects():
+    # Bounded arrays of complex items make Gemini answer 400 INVALID_ARGUMENT.
+    for rule_set in ("refunds", "order_terms", "pricing"):
+        keys = set(_keys(draft_json_schema(rule_set)))
+        assert not keys & {"maxItems", "minItems", "minimum", "maximum"}, rule_set
