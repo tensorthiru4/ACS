@@ -110,7 +110,11 @@ main:
                   - unit_price: ${default(map.get(lf, ["unit_price", "doubleValue"]), double(default(map.get(lf, ["unit_price", "integerValue"]), "-1")))}
                   - complete: ${default(map.get(lf, ["complete", "booleanValue"]), false)}
                   - computed_total: ${computed_total + qty * price_minor}
-                  - lines_xml: ${lines_xml + "<value><array><data><value><int>0</int></value><value><int>0</int></value><value><struct><member><name>product_id</name><value><int>" + string(product_id) + "</int></value></member><member><name>product_uom_qty</name><value><double>" + string(qty) + "</double></value></member><member><name>price_unit</name><value><double>" + string(unit_price) + "</double></value></member></struct></value></data></array></value>"}
+                  # (0, 0, {...}) one2many create command; split to stay under 400 chars.
+                  - x_product: ${"<member><name>product_id</name><value><int>" + string(product_id) + "</int></value></member>"}
+                  - x_qty: ${"<member><name>product_uom_qty</name><value><double>" + string(qty) + "</double></value></member>"}
+                  - x_price: ${"<member><name>price_unit</name><value><double>" + string(unit_price) + "</double></value></member>"}
+                  - lines_xml: ${lines_xml + "<value><array><data><value><int>0</int></value><value><int>0</int></value><value><struct>" + x_product + x_qty + x_price + "</struct></value></data></array></value>"}
             - line_check:
                 switch:
                   - condition: ${not(complete and product_id > 0 and qty > 0 and qty <= max_quantity and price_minor >= 0 and unit_price >= 0)}
@@ -215,12 +219,22 @@ main:
                 assign:
                   # execute_kw(db, uid, key, model, method, ...)
                   - kw_head: ${"<param><value><string>" + esc_db + "</string></value></param><param><value><int>" + string(uid) + "</int></value></param><param><value><string>" + esc_key + "</string></value></param><param><value><string>sale.order</string></value></param>"}
+                  # Workflows caps each expression at 400 characters, so requests are
+                  # assembled from constant pieces and short expressions.
+                  - search_open: "<param><value><string>search</string></value></param><param><value><array><data><value><array><data><value><array><data><value><string>origin</string></value><value><string>=</string></value><value><string>"
+                  - search_close: "</string></value></data></array></value></data></array></value></data></array></value></param><param><value><struct><member><name>limit</name><value><int>1</int></value></member></struct></value></param>"
+                  - create_open: "<param><value><string>create</string></value></param><param><value><array><data><value><struct>"
+                  - create_close: "</struct></value></data></array></value></param>"
+                  - m_partner: ${"<member><name>partner_id</name><value><int>" + string(partner_id) + "</int></value></member>"}
+                  - m_ref: ${"<member><name>client_order_ref</name><value><string>" + esc_po + "</string></value></member>"}
+                  - m_origin: ${"<member><name>origin</name><value><string>" + origin + "</string></value></member>"}
+                  - m_lines: ${"<member><name>order_line</name><value><array><data>" + lines_xml + "</data></array></value></member>"}
             - find_existing:
                 call: xmlrpc_int
                 args:
                   url: ${odoo_url + "/xmlrpc/2/object"}
                   method: execute_kw
-                  params: ${kw_head + "<param><value><string>search</string></value></param><param><value><array><data><value><array><data><value><array><data><value><string>origin</string></value><value><string>=</string></value><value><string>" + origin + "</string></value></data></array></value></data></array></value></data></array></value></param><param><value><struct><member><name>limit</name><value><int>1</int></value></member></struct></value></param>"}
+                  params: ${kw_head + search_open + origin + search_close}
                   required: false
                 result: existing_id
             - create_or_reuse:
@@ -235,7 +249,7 @@ main:
                           args:
                             url: ${odoo_url + "/xmlrpc/2/object"}
                             method: execute_kw
-                            params: ${kw_head + "<param><value><string>create</string></value></param><param><value><array><data><value><struct><member><name>partner_id</name><value><int>" + string(partner_id) + "</int></value></member><member><name>client_order_ref</name><value><string>" + esc_po + "</string></value></member><member><name>origin</name><value><string>" + origin + "</string></value></member><member><name>order_line</name><value><array><data>" + lines_xml + "</data></array></value></member></struct></value></data></array></value></param>"}
+                            params: ${kw_head + create_open + m_partner + m_ref + m_origin + m_lines + create_close}
                             required: true
                           result: order_id
             - confirm:
