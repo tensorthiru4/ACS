@@ -256,3 +256,29 @@ def test_extraction_schema_avoids_constructs_gemini_rejects():
 
     text = str(EXTRACTION_SCHEMA)
     assert "maxItems" not in text and "minimum" not in text
+
+
+def test_workflows_client_is_created_inside_the_serving_loop(monkeypatch):
+    """gRPC aio clients bind to the loop running at construction (regression)."""
+    import asyncio
+
+    from google.cloud.workflows import executions_v1
+
+    from acs_messy_order.adapters import WorkflowsErpLauncher
+
+    loops: list = []
+
+    class FakeExecutions:
+        def __init__(self):
+            loops.append(asyncio.get_running_loop())
+
+        async def create_execution(self, parent, execution):
+            assert asyncio.get_running_loop() is loops[0]
+            assert parent == "projects/p/locations/us-central1/workflows/acs-erp-bridge"
+            return type("E", (), {"name": f"{parent}/executions/1"})()
+
+    monkeypatch.setattr(executions_v1, "ExecutionsAsyncClient", FakeExecutions)
+    launcher = WorkflowsErpLauncher("p", "us-central1", "acs-erp-bridge")
+    assert loops == []
+    name = asyncio.run(launcher.start("m1", "a" * 40))
+    assert name.endswith("/executions/1") and len(loops) == 1

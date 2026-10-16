@@ -109,10 +109,17 @@ class CloudTasksDispatcher:
         from google.cloud import tasks_v2
 
         self._tasks = tasks_v2
-        self._client = tasks_v2.CloudTasksAsyncClient()
-        self._queue = self._client.queue_path(project_id, region, queue)
+        # Created on first use: a gRPC aio channel binds to the event loop that is running
+        # when it is built, and the app is constructed before uvicorn starts its loop.
+        self._client: Any = None
+        self._queue = tasks_v2.CloudTasksClient.queue_path(project_id, region, queue)
         self._target = target_url.rstrip("/")
         self._sa = service_account
+
+    def _get_client(self) -> Any:
+        if self._client is None:
+            self._client = self._tasks.CloudTasksAsyncClient()
+        return self._client
 
     async def dispatch(self, task_id: str) -> None:
         from google.api_core.exceptions import AlreadyExists
@@ -134,7 +141,7 @@ class CloudTasksDispatcher:
             ),
         )
         try:
-            await self._client.create_task(parent=self._queue, task=task)
+            await self._get_client().create_task(parent=self._queue, task=task)
         except AlreadyExists:
             logger.info("audit %s already scheduled", task_id)
 

@@ -394,3 +394,36 @@ async def test_callers_enforced_outside_local(monkeypatch):
         assert (await http.get("/.well-known/agent-card.json")).status_code == 403
         assert (await http.post("/", json={})).status_code == 403
         assert (await http.post("/internal/audits/x/run")).status_code == 403
+
+
+# ------------------------------------------------------------------ event-loop binding
+def test_cloud_tasks_client_is_created_inside_the_serving_loop(monkeypatch):
+    """gRPC aio clients bind to the loop running at construction; the app is built before
+    uvicorn's loop exists, so the client must be created lazily (regression)."""
+    from google.cloud import tasks_v2
+
+    from acs_auditor.infra import CloudTasksDispatcher
+
+    created_in: list = []
+    used_in: list = []
+
+    class FakeTasksClient:
+        def __init__(self):
+            created_in.append(asyncio.get_running_loop())
+
+        async def create_task(self, parent, task):
+            used_in.append(asyncio.get_running_loop())
+            assert parent == "projects/p/locations/us-central1/queues/acs-audits"
+            assert task.http_request.url == "https://auditor.example/internal/audits/t-1/run"
+
+    monkeypatch.setattr(tasks_v2, "CloudTasksAsyncClient", FakeTasksClient)
+    dispatcher = CloudTasksDispatcher(  # built outside any event loop, like create_app()
+        project_id="p",
+        region="us-central1",
+        queue="acs-audits",
+        target_url="https://auditor.example",
+        service_account="a@p.iam.gserviceaccount.com",
+    )
+    assert created_in == []
+    asyncio.run(dispatcher.dispatch("t-1"))
+    assert created_in == used_in and len(used_in) == 1

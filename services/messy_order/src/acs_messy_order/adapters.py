@@ -122,15 +122,24 @@ class WorkflowsErpLauncher:
         from google.cloud.workflows import executions_v1
 
         self._types = executions_v1
-        self._client = executions_v1.ExecutionsAsyncClient()
+        # Created on first use: a gRPC aio channel binds to the event loop that is running
+        # when it is built, and the app is constructed before uvicorn starts its loop.
+        self._client: Any = None
         self._parent = f"projects/{project_id}/locations/{region}/workflows/{workflow}"
+
+    def _get_client(self) -> Any:
+        if self._client is None:
+            self._client = self._types.ExecutionsAsyncClient()
+        return self._client
 
     async def start(self, merchant_id: str, draft_id: str) -> str:
         execution = self._types.Execution(
             argument=json.dumps({"merchant_id": merchant_id, "draft_id": draft_id})
         )
         try:
-            result = await self._client.create_execution(parent=self._parent, execution=execution)
+            result = await self._get_client().create_execution(
+                parent=self._parent, execution=execution
+            )
         except Exception as exc:
             raise TransientError("could not start the ERP bridge workflow") from exc
         return result.name
