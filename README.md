@@ -33,7 +33,7 @@ B2B Inbox (Gmail/PDF/voice)  ─┘   + API Gateway                 ├─ A2A �
 | Firebase Hosting / rules | ✅ | [`firebase`](firebase) |
 | CI/CD (Cloud Build + GitHub Actions/WIF) | ✅ | [`cloudbuild`](cloudbuild), [`.github/workflows`](.github/workflows) |
 | Odoo Community (self-hosted) | ⏳ Bring your own; credentials go in the `odoo-credentials` secret | — |
-| Merchant Console SPA | ⏳ Hosting config ready; APIs exist | `console/` (to be added) |
+| **Merchant Console** (React SPA: chat, orders, intake, policies, audits, refunds) | ✅ Built and tested against the live gateway | [`console`](console) |
 
 Downstream agents are optional at deploy time. While one is missing, the orchestrator degrades
 safely: audit and policy calls return `502 <agent> is not configured`, refund requests are
@@ -43,6 +43,7 @@ answered with `ESCALATE`, and draft-order review returns 502.
 
 * [Security model](docs/SECURITY.md): the defense layers from edge to data.
 * [Deployment runbook](docs/DEPLOY.md): free-tier budget table, bootstrap, secrets, tenants.
+* [Testing guide](docs/TESTING.md): unit tests, console scenarios, logs.
 * [Agent contracts](docs/contracts/README.md): the A2A, HTTP and Pub/Sub interfaces the orchestrator uses.
 
 ## Quick start (local)
