@@ -1,0 +1,378 @@
+# ERP Bridge + Safety Gate (Cloud Workflows) - diagram edges "Draft Sales Order" and
+# "ERP: XML-RPC Post SO".
+#
+# Started by the Messy-Order-to-ERP agent for each approved draft:
+#   argument = {"merchant_id": "m1", "draft_id": "<40-hex intake id>"}
+#
+#  1. Load draft_sales_orders/{draft_id} from Firestore.
+#  2. Safety gate: deterministic re-check of every invariant, independent of the LLM and
+#     of the rule engine (tenant, status, ERP ids, quantities, prices, totals, caps).
+#  3. Claim the draft (status approved -> posting) with an updateTime precondition, so
+#     concurrent or repeated executions can never post the same order twice.
+#  4. Read Odoo credentials from Secret Manager and post a sale.order (quotation) over
+#     XML-RPC. An existing order with origin "ACS:<draft_id>" is reused, so a crash between
+#     create and step 5 never duplicates the order.
+#  5. Record posted / erp_failed / erp_blocked on the draft.
+#
+# Odoo secret `odoo-credentials` (JSON): {"url": "https://erp.example.com", "db": "...",
+#   "login": "acs-bridge@example.com", "api_key": "..."}
+# Env (Terraform user_env_vars): FIRESTORE_DATABASE, ODOO_SECRET, MAX_AUTO_POST_MINOR,
+#   MAX_LINES, MAX_LINE_QUANTITY, CONFIRM_ORDERS.
+# Call logging is off (LOG_NONE): XML-RPC request bodies carry the Odoo API key.
+
+main:
+  params: [args]
+  steps:
+    - init:
+        assign:
+          - project: ${sys.get_env("GOOGLE_CLOUD_PROJECT_ID")}
+          - database: ${sys.get_env("FIRESTORE_DATABASE")}
+          - odoo_secret: ${sys.get_env("ODOO_SECRET")}
+          - max_total_minor: ${double(sys.get_env("MAX_AUTO_POST_MINOR"))}
+          - max_lines: ${int(sys.get_env("MAX_LINES"))}
+          - max_quantity: ${double(sys.get_env("MAX_LINE_QUANTITY"))}
+          - confirm_orders: ${sys.get_env("CONFIRM_ORDERS") == "true"}
+          - merchant_id: ${default(map.get(args, "merchant_id"), "")}
+          - draft_id: ${default(map.get(args, "draft_id"), "")}
+    - validate_args:
+        switch:
+          - condition: ${not(text.match_regex(draft_id, "^[0-9a-f]{40}$")) or not(text.match_regex(merchant_id, "^[A-Za-z0-9_-]{1,64}$"))}
+            raise:
+              code: 400
+              message: "merchant_id and a 40-hex draft_id are required"
+    - doc_path:
+        assign:
+          - doc_name: ${"projects/" + project + "/databases/" + database + "/documents/draft_sales_orders/" + draft_id}
+
+    # ------------------------------------------------------------------ 1. load
+    - load_draft:
+        call: googleapis.firestore.v1.projects.databases.documents.get
+        args:
+          name: ${doc_name}
+        result: doc
+    - unpack:
+        assign:
+          - f: ${doc.fields}
+          - update_time: ${doc.updateTime}
+          - status: ${default(map.get(f, ["status", "stringValue"]), "")}
+          - doc_merchant: ${default(map.get(f, ["merchant_id", "stringValue"]), "")}
+          - currency: ${default(map.get(f, ["currency", "stringValue"]), "")}
+          - po_number: ${default(map.get(f, ["po_number", "stringValue"]), "")}
+          - partner_id: ${int(default(map.get(f, ["customer", "mapValue", "fields", "odoo_partner_id", "integerValue"]), "-1"))}
+          - total_minor: ${double(default(map.get(f, ["total_minor", "integerValue"]), "-1"))}
+          - lines: ${default(map.get(f, ["lines", "arrayValue", "values"]), [])}
+          - computed_total: 0.0
+          - lines_xml: ""
+          - problems: []
+    - already_done:
+        switch:
+          - condition: ${doc_merchant == merchant_id and status == "posted"}
+            return:
+              status: already_posted
+              order_id: ${map.get(f, ["erp", "mapValue", "fields", "order_id", "integerValue"])}
+
+    # ------------------------------------------------------------------ 2. safety gate
+    - gate_header:
+        assign:
+          - header_checks:
+              - ok: ${doc_merchant == merchant_id}
+                problem: "draft belongs to another merchant"
+              - ok: ${status == "approved"}
+                problem: ${"draft is " + status + ", not approved"}
+              - ok: ${text.match_regex(currency, "^[A-Z]{3}$")}
+                problem: "invalid currency"
+              - ok: ${partner_id > 0}
+                problem: "customer has no Odoo partner"
+              - ok: ${len(lines) >= 1 and len(lines) <= max_lines}
+                problem: "line count out of range"
+    - collect_header_problems:
+        for:
+          value: check
+          in: ${header_checks}
+          steps:
+            - header_check:
+                switch:
+                  - condition: ${not(check.ok)}
+                    assign:
+                      - problems: ${list.concat(problems, check.problem)}
+    - gate_lines:
+        for:
+          value: line
+          in: ${lines}
+          steps:
+            - read_line:
+                assign:
+                  - lf: ${map.get(line, ["mapValue", "fields"])}
+                  - line_no: ${default(map.get(lf, ["line_no", "integerValue"]), "?")}
+                  - product_id: ${int(default(map.get(lf, ["odoo_product_id", "integerValue"]), "-1"))}
+                  - qty: ${default(map.get(lf, ["quantity", "doubleValue"]), double(default(map.get(lf, ["quantity", "integerValue"]), "-1")))}
+                  - price_minor: ${double(default(map.get(lf, ["unit_price_minor", "integerValue"]), "-1"))}
+                  - unit_price: ${default(map.get(lf, ["unit_price", "doubleValue"]), double(default(map.get(lf, ["unit_price", "integerValue"]), "-1")))}
+                  - complete: ${default(map.get(lf, ["complete", "booleanValue"]), false)}
+                  - computed_total: ${computed_total + qty * price_minor}
+                  - lines_xml: ${lines_xml + "<value><array><data><value><int>0</int></value><value><int>0</int></value><value><struct><member><name>product_id</name><value><int>" + string(product_id) + "</int></value></member><member><name>product_uom_qty</name><value><double>" + string(qty) + "</double></value></member><member><name>price_unit</name><value><double>" + string(unit_price) + "</double></value></member></struct></value></data></array></value>"}
+            - line_check:
+                switch:
+                  - condition: ${not(complete and product_id > 0 and qty > 0 and qty <= max_quantity and price_minor >= 0 and unit_price >= 0)}
+                    assign:
+                      - problems: ${list.concat(problems, "line " + line_no + " failed the gate (product, quantity or price)")}
+    - gate_totals:
+        switch:
+          - condition: ${math.abs(computed_total - total_minor) > len(lines)}
+            assign:
+              - problems: ${list.concat(problems, "line totals do not add up to the order total")}
+    - gate_cap:
+        switch:
+          - condition: ${total_minor > max_total_minor}
+            assign:
+              - problems: ${list.concat(problems, "order total exceeds the auto-post limit")}
+    - gate_verdict:
+        switch:
+          - condition: ${len(problems) > 0}
+            steps:
+              - block:
+                  call: mark_draft
+                  args:
+                    doc_name: ${doc_name}
+                    status: erp_blocked
+                    erp_status: blocked
+                    detail: ${problems}
+                    order_id_value:
+                      nullValue: null
+              - blocked:
+                  return:
+                    status: blocked
+                    problems: ${problems}
+
+    # ------------------------------------------------------------------ 3. claim
+    - claim:
+        try:
+          call: googleapis.firestore.v1.projects.databases.documents.patch
+          args:
+            name: ${doc_name}
+            currentDocument:
+              updateTime: ${update_time}
+            updateMask:
+              fieldPaths: ["status", "erp.status", "erp.claimed_at"]
+            body:
+              fields:
+                status:
+                  stringValue: posting
+                erp:
+                  mapValue:
+                    fields:
+                      status:
+                        stringValue: posting
+                      claimed_at:
+                        timestampValue: ${time.format(sys.now())}
+        except:
+          as: e
+          steps:
+            - lost_race:
+                switch:
+                  - condition: ${default(map.get(e, "code"), 0) == 400 or default(map.get(e, "code"), 0) == 409 or default(map.get(e, "code"), 0) == 412}
+                    return:
+                      status: skipped
+                      reason: "draft changed since it was read (another execution or a reviewer)"
+            - claim_failed:
+                raise: ${e}
+
+    # ------------------------------------------------------------------ 4. post to Odoo
+    - post:
+        try:
+          steps:
+            - get_odoo:
+                call: googleapis.secretmanager.v1.projects.secrets.versions.accessString
+                args:
+                  secret_id: ${odoo_secret}
+                  project_id: ${project}
+                result: odoo_raw
+            - odoo_config:
+                assign:
+                  - odoo: ${json.decode(odoo_raw)}
+                  - odoo_url: ${text.replace_all_regex(odoo.url, "/+$", "")}
+                  - origin: ${"ACS:" + draft_id}
+                  # XML-escape every free-text value placed in a request.
+                  - esc_db: ${text.replace_all(text.replace_all(text.replace_all(odoo.db, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")}
+                  - esc_login: ${text.replace_all(text.replace_all(text.replace_all(odoo.login, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")}
+                  - esc_key: ${text.replace_all(text.replace_all(text.replace_all(odoo.api_key, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")}
+                  - esc_po: ${text.replace_all(text.replace_all(text.replace_all(po_number, "&", "&amp;"), "<", "&lt;"), ">", "&gt;")}
+            - odoo_https_only:
+                switch:
+                  - condition: ${not(text.match_regex(odoo_url, "^https://[^/@]+$"))}
+                    raise:
+                      code: odoo_config
+                      message: "odoo url must be an https origin"
+            - authenticate:
+                call: xmlrpc_int
+                args:
+                  url: ${odoo_url + "/xmlrpc/2/common"}
+                  method: authenticate
+                  params: ${"<param><value><string>" + esc_db + "</string></value></param><param><value><string>" + esc_login + "</string></value></param><param><value><string>" + esc_key + "</string></value></param><param><value><struct></struct></value></param>"}
+                  required: true
+                result: uid
+            - kw_prefix:
+                assign:
+                  # execute_kw(db, uid, key, model, method, ...)
+                  - kw_head: ${"<param><value><string>" + esc_db + "</string></value></param><param><value><int>" + string(uid) + "</int></value></param><param><value><string>" + esc_key + "</string></value></param><param><value><string>sale.order</string></value></param>"}
+            - find_existing:
+                call: xmlrpc_int
+                args:
+                  url: ${odoo_url + "/xmlrpc/2/object"}
+                  method: execute_kw
+                  params: ${kw_head + "<param><value><string>search</string></value></param><param><value><array><data><value><array><data><value><array><data><value><string>origin</string></value><value><string>=</string></value><value><string>" + origin + "</string></value></data></array></value></data></array></value></data></array></value></param><param><value><struct><member><name>limit</name><value><int>1</int></value></member></struct></value></param>"}
+                  required: false
+                result: existing_id
+            - create_or_reuse:
+                switch:
+                  - condition: ${existing_id > 0}
+                    assign:
+                      - order_id: ${existing_id}
+                  - condition: true
+                    steps:
+                      - create:
+                          call: xmlrpc_int
+                          args:
+                            url: ${odoo_url + "/xmlrpc/2/object"}
+                            method: execute_kw
+                            params: ${kw_head + "<param><value><string>create</string></value></param><param><value><array><data><value><struct><member><name>partner_id</name><value><int>" + string(partner_id) + "</int></value></member><member><name>client_order_ref</name><value><string>" + esc_po + "</string></value></member><member><name>origin</name><value><string>" + origin + "</string></value></member><member><name>order_line</name><value><array><data>" + lines_xml + "</data></array></value></member></struct></value></data></array></value></param>"}
+                            required: true
+                          result: order_id
+            - confirm:
+                switch:
+                  - condition: ${confirm_orders}
+                    call: xmlrpc_call
+                    args:
+                      url: ${odoo_url + "/xmlrpc/2/object"}
+                      method: execute_kw
+                      params: ${kw_head + "<param><value><string>action_confirm</string></value></param><param><value><array><data><value><array><data><value><int>" + string(order_id) + "</int></value></data></array></value></data></array></value></param>"}
+        except:
+          as: e
+          steps:
+            - failure_text:
+                assign:
+                  - failure: ${default(map.get(e, "message"), "ERP error")}
+            - record_failure:
+                call: mark_draft
+                args:
+                  doc_name: ${doc_name}
+                  status: erp_failed
+                  erp_status: failed
+                  detail: ${[failure]}
+                  order_id_value:
+                    nullValue: null
+            - reraise:
+                raise: ${e}
+
+    # ------------------------------------------------------------------ 5. record
+    - record_posted:
+        call: mark_draft
+        args:
+          doc_name: ${doc_name}
+          status: posted
+          erp_status: posted
+          detail: []
+          order_id_value:
+            integerValue: ${string(order_id)}
+    - done:
+        return:
+          status: posted
+          order_id: ${order_id}
+          reused_existing: ${existing_id > 0}
+
+
+# ------------------------------------------------------------------ subworkflows
+# Writes the outcome onto the draft (only status and erp.* fields; erp.execution is kept).
+mark_draft:
+  params: [doc_name, status, erp_status, detail, order_id_value]
+  steps:
+    - init:
+        assign:
+          - details: []
+    - each:
+        for:
+          value: d
+          in: ${detail}
+          steps:
+            - add:
+                assign:
+                  - details: '${list.concat(details, {"stringValue": d})}'
+    - write:
+        call: googleapis.firestore.v1.projects.databases.documents.patch
+        args:
+          name: ${doc_name}
+          updateMask:
+            fieldPaths: ["status", "erp.status", "erp.detail", "erp.order_id", "erp.finished_at"]
+          body:
+            fields:
+              status:
+                stringValue: ${status}
+              erp:
+                mapValue:
+                  fields:
+                    status:
+                      stringValue: ${erp_status}
+                    detail:
+                      arrayValue:
+                        values: ${details}
+                    order_id: ${order_id_value}
+                    finished_at:
+                      timestampValue: ${time.format(sys.now())}
+
+# POSTs one XML-RPC call and returns the response body as text. Raises on HTTP errors
+# (http.post raises for non-2xx) and on XML-RPC faults.
+xmlrpc_call:
+  params: [url, method, params]
+  steps:
+    - send:
+        call: http.post
+        args:
+          url: ${url}
+          headers:
+            Content-Type: text/xml
+          body: ${"<?xml version=\"1.0\"?><methodCall><methodName>" + method + "</methodName><params>" + params + "</params></methodCall>"}
+          timeout: 60
+        result: response
+    - as_text:
+        switch:
+          - condition: ${get_type(response.body) == "bytes"}
+            assign:
+              - body: ${text.decode(response.body)}
+          - condition: true
+            assign:
+              - body: ${response.body}
+    - fault:
+        switch:
+          - condition: ${text.match_regex(body, "<fault>")}
+            raise:
+              code: odoo_fault
+              message: ${"Odoo rejected " + method}
+    - ok:
+        return: ${body}
+
+# XML-RPC call whose result is an integer, or an array whose first element is one.
+# Returns -1 when there is none, or raises when `required` (e.g. failed authentication,
+# where Odoo answers <boolean>0</boolean>).
+xmlrpc_int:
+  params: [url, method, params, required]
+  steps:
+    - call_it:
+        call: xmlrpc_call
+        args:
+          url: ${url}
+          method: ${method}
+          params: ${params}
+        result: body
+    - find:
+        assign:
+          - hits: ${text.find_all_regex(body, "<(int|i4)>-?[0-9]+</(int|i4)>")}
+    - pick:
+        switch:
+          - condition: ${len(hits) > 0}
+            return: ${int(text.replace_all_regex(hits[0].match, "</?(int|i4)>", ""))}
+          - condition: ${required}
+            raise:
+              code: odoo_error
+              message: ${"Odoo " + method + " returned no id (authentication failed?)"}
+    - none:
+        return: -1

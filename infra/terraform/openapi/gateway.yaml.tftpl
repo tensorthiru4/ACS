@@ -143,3 +143,30 @@ paths:
       security: [{firebase: []}]
       parameters: [{name: intake_id, in: path, required: true, type: string}]
       responses: {"200": {description: Intake status}}
+  # ------------------------------------------------------------------ draft sales orders
+  /v1/orders/drafts:
+    get:
+      operationId: listDraftOrders
+      security: [{firebase: []}]
+      parameters:
+        - {name: status, in: query, required: false, type: string}
+        - {name: limit, in: query, required: false, type: integer}
+      responses: {"200": {description: Draft sales orders}}
+  /v1/orders/drafts/{intake_id}:
+    get:
+      operationId: getDraftOrder
+      security: [{firebase: []}]
+      parameters: [{name: intake_id, in: path, required: true, type: string}]
+      responses: {"200": {description: Draft sales order}}
+  /v1/orders/drafts/{intake_id}/release:
+    post:
+      operationId: releaseDraftOrder
+      security: [{firebase: []}]
+      parameters: [{name: intake_id, in: path, required: true, type: string}]
+      responses: {"200": {description: Released to the ERP bridge}}
+  /v1/orders/drafts/{intake_id}/reject:
+    post:
+      operationId: rejectDraftOrder
+      security: [{firebase: []}]
+      parameters: [{name: intake_id, in: path, required: true, type: string}]
+      responses: {"200": {description: Rejected}}

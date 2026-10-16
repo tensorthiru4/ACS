@@ -37,6 +37,8 @@ class Capability(StrEnum):
     REFUND_DECIDE = "refund.decide"
     INTAKE_SUBMIT = "intake.submit"
     INTAKE_READ = "intake.read"
+    ORDER_READ = "order.read"
+    ORDER_RELEASE = "order.release"
     A2A_SHOPPER = "a2a.shopper"
 
 
@@ -45,11 +47,14 @@ _MERCHANT_MIN_ROLE: dict[Capability, Role] = {
     Capability.CONSOLE_CHAT: Role.VIEWER,
     Capability.AUDIT_READ: Role.VIEWER,
     Capability.INTAKE_READ: Role.VIEWER,
+    Capability.ORDER_READ: Role.VIEWER,
     Capability.AUDIT_RUN: Role.ANALYST,
     Capability.REFUND_DECIDE: Role.ANALYST,
     Capability.INTAKE_SUBMIT: Role.ANALYST,
     Capability.POLICY_COMPILE: Role.ADMIN,
     Capability.POLICY_DEPLOY: Role.ADMIN,
+    # Releasing a draft posts it to the ERP: admins only, and never exposed to the LLM.
+    Capability.ORDER_RELEASE: Role.ADMIN,
 }
 
 # Capabilities granted to machine principals.

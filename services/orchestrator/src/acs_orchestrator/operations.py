@@ -12,6 +12,7 @@ import binascii
 import hashlib
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,6 +20,7 @@ from typing import Any
 
 from .clients.a2a_client import A2AAgentClient, A2ACallError, A2AResult
 from .clients.gmail import GmailReader
+from .clients.order_desk import OrderDeskClient, OrderDeskError
 from .clients.pubsub import PoPublisher
 from .clients.rule_engine import RuleEngineClient, RuleEngineError
 from .clients.store import Store, intake_id_for
@@ -28,6 +30,8 @@ from .models import (
     A2ATaskView,
     AuditRequest,
     Decision,
+    DraftRejectRequest,
+    DraftReleaseRequest,
     IntakeReceipt,
     IntakeSource,
     Money,
@@ -45,6 +49,20 @@ logger = logging.getLogger(__name__)
 AUDITOR = "auditor"
 POLICY_COMPILER = "policy_compiler"
 POLICY_DRAFT = "policy_draft"
+
+_DRAFT_ID = re.compile(r"^[0-9a-f]{40}$")
+_DRAFT_STATUSES = frozenset(
+    {"approved", "needs_review", "rejected", "posting", "posted", "erp_failed", "erp_blocked"}
+)
+# Draft fields shown to merchant users (internal storage paths and raw facts stay inside).
+_DRAFT_VIEW_KEYS = (
+    "intake_id", "status", "source", "po_number", "order_date", "requested_delivery_date",
+    "payment_terms_days", "currency", "customer", "lines", "total_minor", "extraction",
+    "terms", "approved_by", "approved_at", "rejected_by", "rejection_reason", "erp",
+    "created_at", "updated_at",
+)  # fmt: skip
+_DRAFT_SUMMARY_KEYS = ("intake_id", "status", "po_number", "currency", "total_minor",
+                       "created_at")  # fmt: skip
 
 
 class NotFoundError(LookupError):
@@ -65,6 +83,7 @@ class Operations:
     policy_compiler: A2AAgentClient | None
     gmail: GmailReader | None = None
     resolve_dns: bool = True
+    order_desk: OrderDeskClient | None = None
 
     # ================================================================== refunds
     async def decide_refund(
@@ -399,6 +418,75 @@ class Operations:
                 logger.info("gmail push: candidate rejected: %s", exc)
         await self.store.set_gmail_history(mailbox, latest)
         return queued
+
+    # ================================================================== draft sales orders
+    async def _own_draft(self, principal: Principal, intake_id: str) -> dict[str, Any]:
+        if not _DRAFT_ID.match(intake_id or ""):
+            raise NotFoundError("draft not found")
+        draft = await self.store.get_draft_order(intake_id)
+        if not draft or draft.get("merchant_id") != principal.merchant_id:
+            raise NotFoundError("draft not found")
+        return draft
+
+    async def list_draft_orders(
+        self, principal: Principal, status: str | None = None, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        require(principal, Capability.ORDER_READ)
+        if status is not None and status not in _DRAFT_STATUSES:
+            raise NotFoundError("unknown status")
+        drafts = await self.store.list_draft_orders(principal.merchant_id, min(max(limit, 1), 100))
+        return [
+            {k: d.get(k) for k in _DRAFT_SUMMARY_KEYS}
+            for d in drafts
+            if status is None or d.get("status") == status
+        ]
+
+    async def get_draft_order(self, principal: Principal, intake_id: str) -> dict[str, Any]:
+        require(principal, Capability.ORDER_READ)
+        draft = await self._own_draft(principal, intake_id)
+        return {k: draft.get(k) for k in _DRAFT_VIEW_KEYS}
+
+    def _desk(self) -> OrderDeskClient:
+        if self.order_desk is None:
+            raise OrderDeskError("Messy-Order-to-ERP agent is not configured")
+        return self.order_desk
+
+    async def release_draft_order(
+        self, principal: Principal, intake_id: str, request: DraftReleaseRequest
+    ) -> dict[str, Any]:
+        """Human approval: the agent re-validates and starts the ERP bridge. Not an LLM tool."""
+        require(principal, Capability.ORDER_RELEASE)
+        await self._own_draft(principal, intake_id)
+        result = await self._desk().release(
+            intake_id,
+            merchant_id=principal.merchant_id,
+            approved_by=principal.adk_user_id,
+            line_overrides=[o.model_dump() for o in request.line_overrides],
+            customer_ref=request.customer_ref,
+        )
+        audit(
+            "order.release",
+            principal=principal.adk_user_id,
+            outcome=str(result.get("status")),
+            intake_id=intake_id,
+            overrides=len(request.line_overrides),
+        )
+        return result
+
+    async def reject_draft_order(
+        self, principal: Principal, intake_id: str, request: DraftRejectRequest
+    ) -> dict[str, Any]:
+        require(principal, Capability.ORDER_RELEASE)
+        await self._own_draft(principal, intake_id)
+        result = await self._desk().reject(
+            intake_id,
+            merchant_id=principal.merchant_id,
+            rejected_by=principal.adk_user_id,
+            reason=request.reason,
+        )
+        audit("order.reject", principal=principal.adk_user_id, outcome="rejected",
+              intake_id=intake_id)  # fmt: skip
+        return result
 
     # ================================================================== helpers
     @staticmethod

@@ -7,6 +7,7 @@ Collections (all server-side only; firebase/firestore.rules denies client access
   a2a_tasks/{agent}:{task_id}                  tenant ownership of delegated A2A tasks
   refund_decisions/{merchant_id}:{idem_key}    idempotent refund decisions
   gmail_state/{mailbox}                        last processed Gmail historyId
+  draft_sales_orders/{intake_id}               read-only here; written by the messy-order agent
 """
 
 from __future__ import annotations
@@ -35,6 +36,8 @@ class Store(Protocol):
     async def save_refund_decision(self, key: str, record: dict[str, Any]) -> bool: ...
     async def get_gmail_history(self, mailbox: str) -> str | None: ...
     async def set_gmail_history(self, mailbox: str, history_id: str) -> None: ...
+    async def get_draft_order(self, intake_id: str) -> dict[str, Any] | None: ...
+    async def list_draft_orders(self, merchant_id: str, limit: int) -> list[dict[str, Any]]: ...
 
 
 class FirestoreStore:
@@ -92,6 +95,21 @@ class FirestoreStore:
             {"history_id": history_id, "updated_at": _now()}
         )
 
+    async def get_draft_order(self, intake_id: str) -> dict[str, Any] | None:
+        return await self._get("draft_sales_orders", intake_id)
+
+    async def list_draft_orders(self, merchant_id: str, limit: int) -> list[dict[str, Any]]:
+        from google.cloud.firestore_v1 import FieldFilter, Query
+
+        # Composite index (merchant_id, created_at desc): infra/terraform/agents.tf.
+        query = (
+            self._db.collection("draft_sales_orders")
+            .where(filter=FieldFilter("merchant_id", "==", merchant_id))
+            .order_by("created_at", direction=Query.DESCENDING)
+            .limit(limit)
+        )
+        return [snap.to_dict() async for snap in query.stream()]
+
 
 class MemoryStore:
     """In-process store for local development and tests."""
@@ -139,3 +157,12 @@ class MemoryStore:
 
     async def set_gmail_history(self, mailbox: str, history_id: str) -> None:
         self._col("gmail_state")[mailbox] = {"history_id": history_id}
+
+    async def get_draft_order(self, intake_id: str) -> dict[str, Any] | None:
+        return self._col("draft_sales_orders").get(intake_id)
+
+    async def list_draft_orders(self, merchant_id: str, limit: int) -> list[dict[str, Any]]:
+        drafts = [d for d in self._col("draft_sales_orders").values()
+                  if d.get("merchant_id") == merchant_id]  # fmt: skip
+        drafts.sort(key=lambda d: d.get("created_at") or _now(), reverse=True)
+        return drafts[:limit]

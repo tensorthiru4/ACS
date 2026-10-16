@@ -45,8 +45,8 @@ resource "google_pubsub_topic_iam_member" "orchestrator_publish_po" {
 # ---- Downstream agents ---------------------------------------------------------------
 resource "google_project_iam_member" "agents_firestore" {
   # Rule engine reads rule sets; messy-order agent writes draft SOs and reads the SKU index;
-  # the compiler stores drafts.
-  for_each = toset(["rule_engine", "messy_order", "policy_compiler"])
+  # the compiler stores drafts and deploys rule sets; the auditor persists A2A task state.
+  for_each = toset(["rule_engine", "messy_order", "policy_compiler", "auditor"])
   project  = var.project_id
   role     = "roles/datastore.user"
   member   = google_service_account.sa[each.key].member

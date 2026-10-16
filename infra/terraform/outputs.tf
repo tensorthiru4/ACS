@@ -12,6 +12,14 @@ output "agent_urls" {
   value = { for k, v in google_cloud_run_v2_service.agent : k => v.uri }
 }
 
+output "erp_bridge_workflow" {
+  value = google_workflows_workflow.erp_bridge.name
+}
+
+output "audits_queue" {
+  value = google_cloud_tasks_queue.audits.name
+}
+
 output "service_accounts" {
   value = { for k, v in google_service_account.sa : k => v.email }
 }

@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     auditor_url: str = ""
     policy_compiler_url: str = ""
     rule_engine_url: str = ""
+    # Messy-Order-to-ERP agent: human release/reject of draft sales orders.
+    messy_order_url: str = ""
 
     # --- Data plane
     firestore_database: str = "(default)"

@@ -1,0 +1,14 @@
+# Build context for the agent images is the repository root (they need libs/acs_common).
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/.env
+**/tests
+.git
+.github
+infra
+firebase
+docs
+scripts
+*.pdf

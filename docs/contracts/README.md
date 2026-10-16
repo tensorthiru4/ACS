@@ -98,3 +98,53 @@ Published by the orchestrator and push-delivered to the Messy-Order-to-ERP agent
 The consumer stores the raw PO in `gs://<project>-acs-raw-po/{merchant_id}/{intake_id}`, updates
 `po_intake/{intake_id}.status` (`processing`, `drafted`, `failed`), and must be idempotent on
 `intake_id`. After 5 failed deliveries a message moves to `po-intake-events-dlq`.
+
+### Rule-set document (`rule_sets/{merchant_id}:{rule_set}`)
+
+Written only by the compiler's `deploy_rules`, which also keeps an immutable copy in `versions/{vN}`.
+Schema and semantics: `libs/acs_common/src/acs_common/rules.py`.
+
+```json
+{ "merchant_id": "m1", "rule_set": "refunds", "version": "v7", "default_decision": "ESCALATE",
+  "params": { "unverified_escalation_minor": 5000 },
+  "rules": [ { "id": "damaged_recent", "when": "reason == 'damaged' && days_since_delivery <= 30",
+               "decision": "APPROVE", "reason": "damaged within 30 days", "max_refund_minor": 20000 } ] }
+```
+
+`order_terms` facts, sent by the messy-order agent: `order_total_minor`, `currency`, `line_count`,
+`unmatched_line_count`, `min_match_confidence`, `max_price_variance_pct`, `customer_known`,
+`customer_ref`, `payment_terms_days`, `customer_payment_terms_days`, `extraction_confidence`,
+`source`, `has_po_number`, `requested_delivery_days`.
+
+## 5. Draft sales orders and the ERP bridge
+
+`draft_sales_orders/{intake_id}` is created once by the messy-order agent:
+
+| field | meaning |
+|---|---|
+| `status` | `approved` → `posting` → `posted`; or `needs_review`, `rejected`, `erp_failed`, `erp_blocked` |
+| `customer` | `{ref, known, odoo_partner_id, name, payment_terms_days}`; `ref` comes from the intake channel |
+| `lines[]` | `{line_no, description, customer_sku, quantity, uom, quoted_price_minor, unit_price_minor, unit_price, list_price_minor, sku, odoo_product_id, match_method, match_confidence, price_variance_pct, complete}` |
+| `total_minor`, `currency`, `po_number`, `order_date`, `requested_delivery_date`, `payment_terms_days` | order header |
+| `terms` | rule-engine verdict `{decision, reasons, matched_rule_ids, rule_set_version, source}` |
+| `erp` | `{execution, status, order_id, detail[], claimed_at, finished_at}` |
+
+**ERP Bridge + Safety Gate** (Cloud Workflows `acs-erp-bridge`, `workflows/erp_bridge.yaml`) is
+started with `{"merchant_id", "draft_id"}` for every `approved` draft. It re-checks the draft,
+claims it with an `updateTime` precondition, and calls Odoo XML-RPC: `common.authenticate`, then
+`sale.order.search` on `origin = "ACS:<draft_id>"`, then `sale.order.create`, plus
+`action_confirm` if `erp.confirm_orders`. It records `posted`, `erp_failed` or `erp_blocked`.
+
+Odoo secret `odoo-credentials`: `{"url": "https://…", "db": "…", "login": "…", "api_key": "…"}`.
+
+## 6. Draft review: orchestrator ↔ messy-order agent
+
+Console (Firebase, admin for release/reject, viewer for reads), orchestrator routes:
+`GET /v1/orders/drafts[?status=]`, `GET /v1/orders/drafts/{intake_id}`,
+`POST /v1/orders/drafts/{intake_id}/release` `{line_overrides: [{line_no, sku}], customer_ref?}`,
+`POST /v1/orders/drafts/{intake_id}/reject` `{reason}`.
+
+The orchestrator checks tenancy and relays to the agent at `POST {messy_order_url}/v1/drafts/{intake_id}/release|reject`
+with `merchant_id` and `approved_by`/`rejected_by` (its ADK user id). The agent answers `404`
+(unknown draft or other tenant), `409` (wrong state or incomplete draft) or `422` (unknown SKU or
+unmapped customer).

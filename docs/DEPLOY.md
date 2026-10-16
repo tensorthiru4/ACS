@@ -17,6 +17,8 @@ The steps below assume a project with billing enabled (Cloud Run requires it) an
 | Artifact Registry | 0.5 GB | Cleanup keeps the 3 newest images |
 | Cloud Build | 2,500 build-min (e2-standard-2) | CI |
 | Gemini Flash | AI Studio free-tier rate limits | All LLM agents |
+| Cloud Tasks | 1M operations | One task per storefront audit |
+| Cloud Workflows | 5,000 internal steps, 2,000 external HTTP calls | ERP bridge: about 15 steps + 3 to 4 Odoo calls per order |
 
 ## 1. Bootstrap
 
@@ -107,3 +109,42 @@ Create a Workload Identity Federation pool and provider for GitHub. Grant the de
 `roles/cloudbuild.builds.editor`, `roles/run.developer`, `roles/artifactregistry.writer` and
 `roles/iam.serviceAccountUser` on the orchestrator SA. Then set these repo variables:
 `GCP_WIF_PROVIDER`, `GCP_DEPLOY_SA` and `GCP_PROJECT_ID`.
+
+## 8. Downstream agents and the ERP bridge
+
+Build each agent from the repository root. On the first build the service does not exist yet,
+so the build prints the digest to put in `agent_images`:
+
+```bash
+for agent in rule_engine policy_compiler auditor messy_order; do
+  gcloud builds submit --config cloudbuild/agent.yaml \
+    --substitutions=_AGENT=$agent,SHORT_SHA=$(git rev-parse --short HEAD) .
+done
+```
+
+Set `agent_images = { rule_engine = "…@sha256:…", … }` (and optionally `erp = {…}`) in
+`terraform.tfvars`, then run `terraform apply`. This creates the agents, the `acs-audits` Cloud
+Tasks queue, the `acs-erp-bridge` workflow and the Pub/Sub push subscription, and wires every agent
+URL into the orchestrator. The rule engine can be deployed alone first: refunds then use its
+baseline rules, so everything escalates until a policy is deployed.
+
+**Odoo.** Run Odoo Community yourself (HTTPS required) and create a dedicated user with sales
+rights and an API key. Then store the credentials:
+
+```bash
+printf '%s' '{"url":"https://erp.example.com","db":"prod","login":"acs-bridge@example.com","api_key":"…"}' \
+  | gcloud secrets versions add odoo-credentials --data-file=-
+```
+
+**Catalog and customers** (needed before orders can auto-post):
+
+```bash
+cd services/messy_order
+uv run acs-messy-admin load-skus --merchant m1 --csv catalog.csv
+uv run acs-messy-admin set-customer --merchant m1 --ref buyer-one.example --partner-id 42 --terms 30
+```
+
+**First policies.** Compile in the console, or with `POST /v1/policies/compile` and
+`target_rule_set` set to `refunds` or `order_terms`. Review the test table, then deploy with
+`POST /v1/policies/{draft_id}/deploy`. Orders auto-post only when an `order_terms` rule
+approves them. Otherwise they wait in `GET /v1/orders/drafts?status=needs_review`.

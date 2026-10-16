@@ -118,6 +118,23 @@ class A2ATaskView(BaseModel):
     result: Any = None
 
 
+# ----------------------------------------------------------------------------- draft orders
+class LineOverride(Strict):
+    line_no: int = Field(ge=1, le=200)
+    sku: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:/ -]+$")
+
+
+class DraftReleaseRequest(Strict):
+    """Admin approval of a draft sales order, optionally fixing SKU matches or the buyer."""
+
+    line_overrides: list[LineOverride] = Field(default_factory=list, max_length=200)
+    customer_ref: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9._@-]+$")
+
+
+class DraftRejectRequest(Strict):
+    reason: str = Field(default="", max_length=500)
+
+
 # ----------------------------------------------------------------------------- console chat
 class ChatMessage(Strict):
     text: str = Field(min_length=1, max_length=8000)

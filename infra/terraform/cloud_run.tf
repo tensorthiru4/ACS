@@ -13,12 +13,13 @@ locals {
     } : name => image if image != ""
   }
 
-  # Who may invoke each private agent (diagram edges).
+  # Who may invoke each private agent (diagram edges). The auditor invokes itself through
+  # Cloud Tasks (audit runs); the orchestrator relays draft-order reviews to messy_order.
   agent_invokers = {
-    auditor         = ["orchestrator"]
+    auditor         = ["orchestrator", "auditor"]
     policy_compiler = ["orchestrator"]
     rule_engine     = ["orchestrator", "messy_order", "policy_compiler"]
-    messy_order     = ["pubsub_push"]
+    messy_order     = ["pubsub_push", "orchestrator"]
   }
 
   agent_url = { for k, v in google_cloud_run_v2_service.agent : k => v.uri }
@@ -69,6 +70,7 @@ resource "google_cloud_run_v2_service" "orchestrator" {
           ACS_AUDITOR_URL                  = lookup(local.agent_url, "auditor", "")
           ACS_POLICY_COMPILER_URL          = lookup(local.agent_url, "policy_compiler", "")
           ACS_RULE_ENGINE_URL              = lookup(local.agent_url, "rule_engine", "")
+          ACS_MESSY_ORDER_URL              = lookup(local.agent_url, "messy_order", "")
           ACS_CORS_ALLOWED_ORIGINS         = jsonencode(var.console_origins)
           ACS_GMAIL_PUSH_AUDIENCE          = var.gmail.enabled ? local.gmail_push_audience : ""
           ACS_GMAIL_PUSH_SERVICE_ACCOUNT   = var.gmail.enabled ? google_service_account.sa["pubsub_push"].email : ""
@@ -153,6 +155,9 @@ resource "google_cloud_run_v2_service" "agent" {
   # Direct VPC egress on every caller; enable both together if you add a VPC.
   ingress             = "INGRESS_TRAFFIC_ALL"
   deletion_protection = var.environment == "prod"
+  # Callers that cannot know the generated URL (other agents, Cloud Tasks) use the
+  # deterministic one as their ID-token audience.
+  custom_audiences = [local.run_url[each.key]]
 
   template {
     service_account = google_service_account.sa[each.key].email
@@ -176,15 +181,61 @@ resource "google_cloud_run_v2_service" "agent" {
         cpu_idle          = true
         startup_cpu_boost = true
       }
-      env {
-        name  = "ACS_PROJECT_ID"
-        value = var.project_id
+      ports {
+        container_port = 8080
       }
-      env {
-        name  = "ACS_ENV"
-        value = var.environment
+
+      dynamic "env" {
+        for_each = merge(
+          {
+            ACS_PROJECT_ID = var.project_id
+            ACS_ENV        = var.environment
+          },
+          local.agent_env[each.key]
+        )
+        content {
+          name  = env.key
+          value = env.value
+        }
+      }
+
+      # Secrets are bound at deploy time; the code never calls Secret Manager.
+      dynamic "env" {
+        for_each = local.agent_secrets[each.key]
+        content {
+          name = env.key
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.secret[env.value].secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+
+      startup_probe {
+        http_get {
+          path = "/health"
+        }
+        initial_delay_seconds = 0
+        period_seconds        = 3
+        failure_threshold     = 20
       }
     }
+  }
+
+  depends_on = [
+    google_project_service.enabled,
+    google_secret_manager_secret_iam_member.agent_gemini_key,
+  ]
+
+  # CI (cloudbuild/agent.yaml) rolls out new image digests; Terraform owns the rest.
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+    ]
   }
 }
 

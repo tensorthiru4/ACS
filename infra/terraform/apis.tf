@@ -6,6 +6,7 @@ locals {
     "bigquery.googleapis.com",
     "billingbudgets.googleapis.com",
     "cloudbuild.googleapis.com",
+    "cloudtasks.googleapis.com",
     "firebase.googleapis.com",
     "firebaserules.googleapis.com",
     "firestore.googleapis.com",

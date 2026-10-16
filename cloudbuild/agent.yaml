@@ -1,0 +1,65 @@
+# Build, test, scan and deploy one downstream agent (built from the repository root so the
+# image can include libs/acs_common).
+#   gcloud builds submit --config cloudbuild/agent.yaml \
+#     --substitutions=_AGENT=rule_engine,SHORT_SHA=$(git rev-parse --short HEAD) .
+# _AGENT: rule_engine | policy_compiler | auditor | messy_order
+substitutions:
+  _AGENT: rule_engine
+  _REGION: us-central1
+  _REPO: acs
+  _SERVICE: acs-${_AGENT}
+  _IMAGE: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO}/${_AGENT}:${SHORT_SHA}
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  # No machineType: the free 2,500 build-minutes cover only the default e2-standard-2.
+  substitutionOption: ALLOW_LOOSE
+  dynamicSubstitutions: true
+
+steps:
+  - id: test
+    name: ghcr.io/astral-sh/uv:0.9.26-python3.12-bookworm-slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        (cd libs/acs_common && uv sync --frozen --all-extras && uv run ruff check src tests && uv run pytest -q)
+        cd services/${_AGENT}
+        uv sync --frozen
+        uv run ruff check src tests
+        uv run pytest -q
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "services/${_AGENT}/Dockerfile", "-t", "${_IMAGE}", "."]
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: ["push", "${_IMAGE}"]
+
+  # Fail the build on fixable HIGH/CRITICAL OS or library vulnerabilities.
+  - id: scan
+    name: aquasec/trivy:0.58.1
+    args: ["image", "--exit-code", "1", "--severity", "HIGH,CRITICAL", "--ignore-unfixed",
+           "--scanners", "vuln", "${_IMAGE}"]
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        # Cloud Run service names use dashes (acs-rule-engine). $$ escapes bash expansions.
+        SERVICE="$$(echo '${_SERVICE}' | tr '_' '-')"
+        IMG="${_IMAGE}"
+        DIGEST=$$(gcloud artifacts docker images describe "$$IMG" --format='value(image_summary.digest)')
+        if ! gcloud run services describe "$$SERVICE" --region "${_REGION}" >/dev/null 2>&1; then
+          echo "Service not created yet; set in terraform.tfvars and apply:"
+          echo "  agent_images = { ${_AGENT} = \"$${IMG%:*}@$${DIGEST}\" }"
+          exit 0
+        fi
+        gcloud run deploy "$$SERVICE" --region "${_REGION}" \
+          --image "$${IMG%:*}@$${DIGEST}" --no-allow-unauthenticated --quiet
+
+images:
+  - ${_IMAGE}

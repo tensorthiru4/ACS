@@ -16,6 +16,7 @@ from google.genai import types
 from .agents.context import bind_operations
 from .agents.orchestrator_agent import build_orchestrator_agent, build_shopper_agent
 from .clients.a2a_client import A2AAgentClient
+from .clients.order_desk import OrderDeskClient
 from .clients.pubsub import MemoryPoPublisher, PubSubPoPublisher
 from .clients.rule_engine import RuleEngineClient
 from .clients.service_auth import service_client
@@ -100,6 +101,7 @@ def build_container(settings: Settings) -> Container:
     auditor_http = downstream(settings.auditor_url)
     compiler_http = downstream(settings.policy_compiler_url)
     rules_http = downstream(settings.rule_engine_url)
+    orders_http = downstream(settings.messy_order_url)
 
     if use_gcp:
         from google.cloud import firestore
@@ -145,6 +147,7 @@ def build_container(settings: Settings) -> Container:
         if compiler_http
         else None,
         gmail=gmail,
+        order_desk=OrderDeskClient(orders_http) if orders_http else None,
     )
     bind_operations(ops)
 

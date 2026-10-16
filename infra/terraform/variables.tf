@@ -66,6 +66,19 @@ variable "gmail" {
   description = "B2B inbox (Gmail push) settings."
 }
 
+variable "erp" {
+  type = object({
+    # Safety gate: orders above this total (minor units) are never auto-posted.
+    max_auto_post_minor = optional(number, 500000)
+    max_line_quantity   = optional(number, 100000)
+    # false: orders land in Odoo as quotations for a human to confirm.
+    confirm_orders   = optional(bool, false)
+    default_currency = optional(string, "USD")
+  })
+  default     = {}
+  description = "ERP Bridge + Safety Gate limits and the messy-order agent's default currency."
+}
+
 variable "billing_account" {
   type        = string
   default     = ""

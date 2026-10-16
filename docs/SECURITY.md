@@ -94,11 +94,33 @@ may fail.
 * Artifact Registry tags are immutable. GitHub deploys use keyless Workload Identity Federation
   behind a protected `production` environment.
 
+## 10. Downstream agents
+* **Caller allow-lists.** Cloud Run IAM is the gate; each route also checks *which* service
+  account called it (`acs_common.service_auth.CallerAllowList`): the rule engine accepts the
+  orchestrator, compiler and messy-order SAs, push intake accepts only `acs-pubsub-push@`,
+  draft review accepts only the orchestrator, and audit runs accept only the auditor itself.
+* **Decisions are deterministic.** Refunds and order terms are decided only by CEL rules, with
+  engine-enforced baseline guards. A missing or invalid rule set, an unreachable engine, or a rule
+  erroring on missing data all escalate to a human.
+* **LLM output is untrusted.** Compiled policies must pass the same validation the engine
+  applies (fact and function allow-lists), and deploys need an admin plus a version check.
+  Extracted POs are schema-validated, customer identity comes from the authenticated channel, and
+  prices are compared against the catalog. Audit scores never come from the model.
+* **ERP safety gate.** The workflow re-checks tenant, status, ERP ids, quantities, prices and
+  totals, and enforces an auto-post cap. It claims the draft with a Firestore `updateTime`
+  precondition (no double posting), reuses an existing Odoo order with the same origin, and reads
+  Odoo credentials from Secret Manager with step logging off.
+* **Auditor SSRF.** Re-validation plus DNS pinning in Chromium, and a per-request host guard (see
+  `services/auditor/README.md`).
+
 ## Known limitations and next hardening steps
 * The rate limiter is per instance and approximate. For strict quotas, add API Gateway quotas or a
   Firestore counter.
 * The A2A inbound task store is in memory. Because requests are blocking this is fine, but it
   should move to Firestore before streaming or async tasks are enabled.
 * The PDF active-content check is a byte-level heuristic, so compressed object streams can hide
-  markers. The messy-order agent should parse PDFs in a sandbox.
+  markers. The messy-order agent never renders PDFs itself; Gemini reads them. A parsing sandbox
+  would still help if local PDF processing is ever added.
+* Audit runs: a run that crashes mid-way leaves the task `WORKING`, and the orchestrator sees it
+  as stuck. Add a staleness check if this shows up in practice.
 * Consider Cloud Armor in front of the gateway when traffic grows. It is not free tier.

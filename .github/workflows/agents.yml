@@ -1,0 +1,66 @@
+name: agents
+
+on:
+  pull_request:
+    paths: ["libs/**", "services/**", "workflows/**", ".github/workflows/agents.yml"]
+  push:
+    branches: [main]
+    paths: ["libs/**", "services/**", "cloudbuild/agent.yaml", ".github/workflows/agents.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        project:
+          - libs/acs_common
+          - services/rule_engine
+          - services/policy_compiler
+          - services/auditor
+          - services/messy_order
+    defaults:
+      run:
+        working-directory: ${{ matrix.project }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.9.26"
+      - run: uv sync --frozen --all-extras
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+      - run: uv run pytest -q
+
+  workflow-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -c "import yaml; yaml.safe_load(open('workflows/erp_bridge.yaml'))"
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, workflow-syntax]
+    runs-on: ubuntu-latest
+    environment: production # require reviewer approval in repo settings
+    strategy:
+      max-parallel: 1 # stay inside the free Cloud Build minutes
+      matrix:
+        agent: [rule_engine, policy_compiler, auditor, messy_order]
+    permissions:
+      contents: read
+      id-token: write # keyless auth via Workload Identity Federation (no JSON keys)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - run: >
+          gcloud builds submit --project "${{ vars.GCP_PROJECT_ID }}"
+          --config cloudbuild/agent.yaml
+          --substitutions=_AGENT=${{ matrix.agent }},SHORT_SHA=${GITHUB_SHA::7} .

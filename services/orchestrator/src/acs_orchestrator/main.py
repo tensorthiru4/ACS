@@ -14,10 +14,11 @@ from fastapi.responses import JSONResponse
 from google.adk.runners import Runner
 from google.genai import errors as genai_errors
 
-from .api import console, intake, merchant, ucp
+from .api import console, intake, merchant, orders, ucp
 from .api.a2a_server import A2AAuthMiddleware, build_a2a_routes
 from .api.deps import RateLimitedError
 from .clients.a2a_client import A2ACallError
+from .clients.order_desk import OrderDeskError, OrderDeskRejected
 from .config import Settings, get_settings
 from .container import Container, build_container
 from .logging_setup import configure_logging, request_id_var
@@ -82,6 +83,14 @@ def _install_error_handlers(app: FastAPI) -> None:
     async def _a2a(_: Request, exc: A2ACallError) -> JSONResponse:
         return _error(502, str(exc))
 
+    @app.exception_handler(OrderDeskError)
+    async def _order_desk(_: Request, exc: OrderDeskError) -> JSONResponse:
+        return _error(502, str(exc))
+
+    @app.exception_handler(OrderDeskRejected)
+    async def _order_rejected(_: Request, exc: OrderDeskRejected) -> JSONResponse:
+        return _error(exc.status, str(exc) if exc.status != 404 else "not found")
+
     @app.exception_handler(genai_errors.APIError)
     async def _model(_: Request, exc: genai_errors.APIError) -> JSONResponse:
         logger.warning("model call failed: %s %s", exc.code, exc.status)
@@ -132,6 +141,7 @@ def create_app(
     app.include_router(console.router)
     app.include_router(merchant.router)
     app.include_router(intake.router)
+    app.include_router(orders.router)
     app.include_router(ucp.router)
 
     def shopper_runner() -> Runner:
