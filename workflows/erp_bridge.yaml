@@ -309,8 +309,11 @@ mark_draft:
           in: ${detail}
           steps:
             - add:
+                # Map literals are not allowed inside expressions; build the value in YAML.
                 assign:
-                  - details: '${list.concat(details, {"stringValue": d})}'
+                  - item:
+                      stringValue: ${d}
+                  - details: ${list.concat(details, item)}
     - write:
         call: googleapis.firestore.v1.projects.databases.documents.patch
         args:
