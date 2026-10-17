@@ -36,6 +36,8 @@ def authenticated(
 
 MerchantUser = authenticated(PrincipalKind.MERCHANT_USER)
 MerchantChat = authenticated(PrincipalKind.MERCHANT_USER, cost=3.0)
+# Progress polls arrive every few seconds during a slow call; keep them cheap.
+MerchantPoll = authenticated(PrincipalKind.MERCHANT_USER, cost=0.25)
 ShopperAgent = authenticated(PrincipalKind.SHOPPER_AGENT)
 IntakeSubmitter = authenticated(PrincipalKind.MERCHANT_USER, PrincipalKind.B2B_PARTNER, cost=2.0)
 B2BPartner = authenticated(PrincipalKind.B2B_PARTNER, cost=2.0)

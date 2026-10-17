@@ -32,6 +32,9 @@ class Settings(BaseSettings):
 
     # --- Model (Gemini via Google AI Studio free tier, key injected from Secret Manager)
     gemini_model: str = "gemini-3.8-flash"
+    # Fallback when Gemini returns 429/5xx: Gemma on the same AI Studio key, which has a
+    # separate free-tier quota. Empty turns the fallback off.
+    fallback_model: str = "gemma-4-31b-it"
 
     # --- Downstream agents (Cloud Run URLs; also used as ID-token audiences)
     auditor_url: str = ""

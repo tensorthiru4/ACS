@@ -24,3 +24,7 @@ gmail = {
 }
 
 billing_account = "" # e.g. "0123AB-4567CD-89EF01" to enable the $1 budget alert
+
+# Fallback model when Gemini is out of quota (free tier: ~20 requests/day per model).
+# Uses the same gemini-api-key; set to "" to turn it off.
+fallback_model = "gemma-4-31b-it"

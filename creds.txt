@@ -1,0 +1,2 @@
+firebase_email=gglrthiru@gmail.com
+firebase_pse=12345678

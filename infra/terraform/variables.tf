@@ -49,6 +49,12 @@ variable "gemini_model" {
   default = "gemini-3.8-flash"
 }
 
+variable "fallback_model" {
+  type        = string
+  default     = "gemma-4-31b-it"
+  description = "Model used when Gemini returns 429/5xx. Gemma runs on the same AI Studio key with a separate free-tier quota. Empty turns the fallback off."
+}
+
 variable "console_origins" {
   type        = list(string)
   default     = []

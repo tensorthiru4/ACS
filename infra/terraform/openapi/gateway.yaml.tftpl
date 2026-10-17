@@ -90,6 +90,12 @@ paths:
       security: [{firebase: []}]
       parameters: [{name: session_id, in: path, required: true, type: string}]
       responses: {"200": {description: Agent reply}}
+  /v1/console/progress/{progress_id}:
+    get:
+      operationId: getProgress
+      security: [{firebase: []}]
+      parameters: [{name: progress_id, in: path, required: true, type: string}]
+      responses: {"200": {description: Progress of a slow console call}}
   /v1/audits:
     post:
       operationId: startAudit

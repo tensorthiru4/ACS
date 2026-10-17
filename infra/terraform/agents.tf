@@ -18,6 +18,7 @@ locals {
     policy_compiler = {
       ACS_SELF_URL              = local.run_url.policy_compiler
       ACS_GEMINI_MODEL          = var.gemini_model
+      ACS_FALLBACK_MODEL        = var.fallback_model
       ACS_ALLOWED_CALLERS       = jsonencode([local.sa_email.orchestrator])
       GOOGLE_GENAI_USE_VERTEXAI = "FALSE"
     }
@@ -25,6 +26,7 @@ locals {
       ACS_SELF_URL              = local.run_url.auditor
       ACS_REGION                = var.region
       ACS_GEMINI_MODEL          = var.gemini_model
+      ACS_FALLBACK_MODEL        = var.fallback_model
       ACS_ALLOWED_CALLERS       = jsonencode([local.sa_email.orchestrator])
       ACS_RUNNER_CALLERS        = jsonencode([local.sa_email.auditor])
       ACS_TASKS_QUEUE           = google_cloud_tasks_queue.audits.name
@@ -39,6 +41,7 @@ locals {
       ACS_RULE_ENGINE_URL       = local.run_url.rule_engine
       ACS_ERP_WORKFLOW          = google_workflows_workflow.erp_bridge.name
       ACS_GEMINI_MODEL          = var.gemini_model
+      ACS_FALLBACK_MODEL        = var.fallback_model
       ACS_PUSH_CALLERS          = jsonencode([local.sa_email.pubsub_push])
       ACS_ORCHESTRATOR_CALLERS  = jsonencode([local.sa_email.orchestrator])
       ACS_DEFAULT_CURRENCY      = var.erp.default_currency

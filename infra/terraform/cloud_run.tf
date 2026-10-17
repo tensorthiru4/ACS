@@ -65,6 +65,7 @@ resource "google_cloud_run_v2_service" "orchestrator" {
           ACS_REGION                       = var.region
           ACS_PUBLIC_BASE_URL              = local.public_base_url
           ACS_GEMINI_MODEL                 = var.gemini_model
+          ACS_FALLBACK_MODEL               = var.fallback_model
           ACS_FIREBASE_PROJECT_ID          = var.project_id
           ACS_PO_INTAKE_TOPIC              = google_pubsub_topic.po_intake.name
           ACS_AUDITOR_URL                  = lookup(local.agent_url, "auditor", "")

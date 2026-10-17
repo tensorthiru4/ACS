@@ -9,9 +9,10 @@ resource "google_firestore_database" "default" {
   depends_on                        = [google_project_service.enabled]
 }
 
-# TTL policies purge abandoned ADK sessions/events (keeps storage inside the free tier).
+# TTL policies purge abandoned ADK sessions/events and console progress records (keeps
+# storage inside the free tier).
 resource "google_firestore_field" "ttl" {
-  for_each   = toset(["sessions", "events"])
+  for_each   = toset(["sessions", "events", "console_progress"])
   database   = google_firestore_database.default.name
   collection = each.value
   field      = "expire_at"
@@ -46,7 +47,7 @@ resource "google_firestore_index" "sku_vector" {
 resource "google_firebaserules_ruleset" "firestore" {
   source {
     files {
-      name    = "firestore.rules"
+      name = "firestore.rules"
       # Normalize line endings so a Windows checkout (autocrlf) does not force a new ruleset.
       content = replace(file("${path.module}/../../firebase/firestore.rules"), "\r\n", "\n")
     }
@@ -265,6 +266,7 @@ resource "google_bigquery_dataset_iam_member" "sink_writer" {
 locals {
   secrets = {
     "gemini-api-key"   = "Google AI Studio API key for Gemini Flash"
+    "groq-api-key"     = "Groq API key for the fallback model used when Gemini is out of quota"
     "api-key-pepper"   = "HMAC pepper for ACS client credential hashes (>= 32 random chars)"
     "gmail-oauth-json" = "Gmail OAuth client + refresh token JSON (gmail.readonly)"
     "odoo-credentials" = "Odoo XML-RPC user + API key for the ERP bridge"
@@ -279,9 +281,18 @@ resource "google_secret_manager_secret" "secret" {
     purpose = each.value
   }
   replication {
-    user_managed {
-      replicas {
-        location = var.region
+    # groq-api-key was created in the console with automatic replication; replication
+    # cannot change in place, so matching it avoids replacing the secret (and its key).
+    dynamic "auto" {
+      for_each = each.key == "groq-api-key" ? [1] : []
+      content {}
+    }
+    dynamic "user_managed" {
+      for_each = each.key == "groq-api-key" ? [] : [1]
+      content {
+        replicas {
+          location = var.region
+        }
       }
     }
   }

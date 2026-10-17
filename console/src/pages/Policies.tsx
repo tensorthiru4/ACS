@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { api, type TaskView } from "../api";
+import { useEffect, useState, type FormEvent } from "react";
+import { api, type Progress, type TaskView } from "../api";
 import { Badge, ErrorBox, PageHead, Spinner } from "../ui";
 
 const RULE_SETS = [
@@ -16,6 +16,13 @@ interface Rule {
   reason: string;
   max_refund_minor?: number;
 }
+/** What the console knows during the wait: the compiler agent itself does not stream. */
+function compileStage(connected: boolean): string {
+  return connected
+    ? "Compiler agent is drafting rules and running the policy tests"
+    : "Sending the policy to the compiler agent";
+}
+
 interface TestResult {
   name: string;
   expected: string;
@@ -32,6 +39,15 @@ export default function Policies() {
   const [deployed, setDeployed] = useState<TaskView | null>(null);
   const [busy, setBusy] = useState<"" | "compile" | "deploy">("");
   const [error, setError] = useState<unknown>(null);
+  const [startedAt, setStartedAt] = useState(0);
+  const [connected, setConnected] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (busy !== "compile") return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [busy]);
+  const elapsed = Math.max(0, Math.round((now - startedAt) / 1000));
 
   const draft = compiled?.result?.data?.[0] as
     | {
@@ -47,8 +63,13 @@ export default function Policies() {
     setError(null);
     setCompiled(null);
     setDeployed(null);
+    setStartedAt(Date.now());
+    setNow(Date.now());
+    setConnected(false);
     try {
-      setCompiled(await api.compilePolicy(name.trim(), ruleSet, text.trim()));
+      // Any progress, even a heartbeat, means the server has the request and is working.
+      const onProgress = (_: Progress) => setConnected(true);
+      setCompiled(await api.compilePolicy(name.trim(), ruleSet, text.trim(), onProgress));
     } catch (e) {
       setError(e);
     } finally {
@@ -97,7 +118,14 @@ export default function Policies() {
           <button className="btn primary" disabled={busy !== ""}>
             {busy === "compile" ? <><Spinner /> Compiling…</> : "Compile draft"}
           </button>
-          <p className="muted small" style={{ margin: 0 }}>Compiling never changes live rules.</p>
+          {busy === "compile" ? (
+            <p className="muted small" role="status" style={{ margin: 0 }}>
+              {compileStage(connected)}… {elapsed}s
+              {elapsed >= 30 ? " · usually 30–90 s on the free-tier model" : ""}
+            </p>
+          ) : (
+            <p className="muted small" style={{ margin: 0 }}>Compiling never changes live rules.</p>
+          )}
         </form>
 
         <div className="stack">

@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from google.genai import types
 
+from ..agents import progress
 from ..agents.context import PRINCIPAL_STATE_KEY
+from ..container import Container
 from ..logging_setup import audit
 from ..models import ChatMessage, ChatReply, SessionInfo
 from ..security.guardrails import GuardrailViolation, injection_signals, normalize_user_text
 from ..security.principals import Capability, Principal, require
-from .deps import MerchantChat, MerchantUser, get_container
+from . import live_progress
+from .deps import MerchantChat, MerchantPoll, MerchantUser, get_container
+from .live_progress import Emit
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/console", tags=["console"])
@@ -71,13 +75,14 @@ async def delete_session(
     return Response(status_code=204)
 
 
-@router.post("/sessions/{session_id}/messages")
+@router.post("/sessions/{session_id}/messages", response_model=ChatReply)
 async def send_message(
     session_id: str,
     body: ChatMessage,
     request: Request,
     principal: Annotated[Principal, Depends(MerchantChat)],
-) -> ChatReply:
+) -> Any:
+    """One chat turn. With `X-Progress-Id` its progress can be polled while it runs."""
     require(principal, Capability.CONSOLE_CHAT)
     c = get_container(request)
     text = normalize_user_text(body.text, c.settings.max_chat_chars)
@@ -101,21 +106,63 @@ async def send_message(
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
 
+    return await live_progress.run_tracked(
+        c.ops.store,
+        principal.adk_user_id,
+        live_progress.progress_id(request),
+        lambda emit: _run_turn(c, principal, session_id, text, emit),
+    )
+
+
+@router.get("/progress/{progress_id}")
+async def get_progress(
+    progress_id: str, request: Request, principal: Annotated[Principal, Depends(MerchantPoll)]
+) -> dict[str, Any]:
+    """Progress of the caller's own slow call that sent `X-Progress-Id` (see live_progress)."""
+    c = get_container(request)
+    return await live_progress.read_progress(c.ops.store, principal.adk_user_id, progress_id)
+
+
+def _tool_failed(response: Any) -> bool:
+    return isinstance(response, dict) and response.get("status") == "error"
+
+
+async def _run_turn(
+    c: Container, principal: Principal, session_id: str, text: str, emit: Emit
+) -> ChatReply:
     reply: list[str] = []
     tool_calls: list[str] = []
     message = types.Content(role="user", parts=[types.Part(text=text)])
+    emit({"type": "status", "text": "Thinking"})
     try:
-        async with asyncio.timeout(c.settings.downstream_timeout_s + 30):
-            async for event in c.console_runner.run_async(
-                user_id=principal.adk_user_id,
-                session_id=session_id,
-                new_message=message,
-                # Refresh the bound principal every turn so role changes apply immediately.
-                state_delta={PRINCIPAL_STATE_KEY: principal.model_dump(mode="json")},
-            ):
-                tool_calls.extend(fc.name for fc in event.get_function_calls() if fc.name)
-                if event.is_final_response() and event.content and event.content.parts:
-                    reply.extend(p.text for p in event.content.parts if p.text and not p.thought)
+        with progress.reporting_to(emit):
+            async with asyncio.timeout(c.settings.downstream_timeout_s + 30):
+                async for event in c.console_runner.run_async(
+                    user_id=principal.adk_user_id,
+                    session_id=session_id,
+                    new_message=message,
+                    # Refresh the bound principal every turn so role changes apply immediately.
+                    state_delta={PRINCIPAL_STATE_KEY: principal.model_dump(mode="json")},
+                ):
+                    for fc in event.get_function_calls():
+                        if fc.name:
+                            tool_calls.append(fc.name)
+                            emit({"type": "tool_call", "name": fc.name})
+                    responses = event.get_function_responses()
+                    for fr in responses:
+                        emit(
+                            {
+                                "type": "tool_result",
+                                "name": fr.name,
+                                "ok": not _tool_failed(fr.response),
+                            }
+                        )
+                    if responses:
+                        emit({"type": "status", "text": "Reading the results"})
+                    if event.is_final_response() and event.content and event.content.parts:
+                        reply.extend(
+                            p.text for p in event.content.parts if p.text and not p.thought
+                        )
     except TimeoutError as exc:
         raise HTTPException(status_code=504, detail="the assistant timed out") from exc
 

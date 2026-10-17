@@ -32,12 +32,13 @@ export function errorMessage(status: number, body: unknown): string {
   return `Request failed (HTTP ${status}).`;
 }
 
-async function request<T>(
+async function send(
   method: string,
   path: string,
-  body?: unknown | FormData,
-  extraHeaders: Record<string, string> = {},
-): Promise<T> {
+  body: unknown | FormData,
+  extraHeaders: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<Response> {
   const user = auth.currentUser;
   if (!user) throw new ApiError(401, "Not signed in.");
   const headers: Record<string, string> = {
@@ -51,7 +52,10 @@ async function request<T>(
     headers["Content-Type"] = "application/json";
     payload = JSON.stringify(body);
   }
-  const response = await fetch(`${BASE}${path}`, { method, headers, body: payload });
+  return fetch(`${BASE}${path}`, { method, headers, body: payload, signal });
+}
+
+async function readJson<T>(response: Response): Promise<T> {
   if (response.status === 204) return undefined as T;
   const text = await response.text();
   let data: unknown = undefined;
@@ -68,6 +72,103 @@ async function request<T>(
     );
   }
   return data as T;
+}
+
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown | FormData,
+  extraHeaders: Record<string, string> = {},
+  signal?: AbortSignal,
+): Promise<T> {
+  return readJson<T>(await send(method, path, body, extraHeaders, signal));
+}
+
+/** What the server is doing right now, polled while a slow call runs. */
+export type Progress = { elapsed_s: number } & (
+  | { type: "status"; text: string }
+  | { type: "tool_call"; name: string }
+  | { type: "tool_result"; name: string; ok: boolean }
+  | { type: "model"; model: string; text: string }
+  | { type: "heartbeat" }
+);
+
+interface ProgressRecord {
+  events: (Progress & { seq: number })[];
+  elapsed_s: number;
+  done: boolean;
+}
+
+export const TRACKING = {
+  /** How often to ask for progress. */
+  pollMs: 2_500,
+  /** The server refreshes progress at least every 5 s; this long without it, the call is lost. */
+  stallMs: 45_000,
+  /** Past the gateway's 300 s deadline: by then the gateway itself has answered. */
+  limitMs: 320_000,
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * POST a slow call and report its progress while it runs (see the orchestrator's
+ * api/live_progress.py). API Gateway buffers response bodies, so the call returns its
+ * ordinary JSON once it is done, and progress is polled from a separate endpoint under a
+ * random id sent as `X-Progress-Id`. Any refresh of that progress (events or heartbeat)
+ * is passed on, so a caller can show the server is still working.
+ */
+export async function tracked<T>(path: string, body: unknown, onProgress: (p: Progress) => void): Promise<T> {
+  const id = crypto.randomUUID();
+  const abort = new AbortController();
+  let stalled = false;
+  let finished = false;
+  const lost = () => {
+    stalled = true;
+    abort.abort();
+  };
+  const limit = setTimeout(lost, TRACKING.limitMs);
+
+  const poll = async () => {
+    let seq = 0;
+    let elapsed = -1;
+    let freshAt = Date.now();
+    while (!finished) {
+      await sleep(TRACKING.pollMs);
+      if (finished) return;
+      try {
+        const progress = await request<ProgressRecord>("GET", `/v1/console/progress/${id}`);
+        if (finished) return;
+        for (const event of progress.events) {
+          if (event.seq > seq) {
+            seq = event.seq;
+            onProgress(event);
+          }
+        }
+        if (progress.elapsed_s !== elapsed) {
+          elapsed = progress.elapsed_s;
+          freshAt = Date.now();
+          onProgress({ type: "heartbeat", elapsed_s: elapsed });
+        }
+        if (progress.done) return;
+      } catch {
+        // 404 until the server's first write; other failures are retried on the next poll.
+      }
+      // Only a server we have heard from can be declared lost; otherwise wait for the limit.
+      if (elapsed >= 0 && Date.now() - freshAt > TRACKING.stallMs) return lost();
+    }
+  };
+  // Not awaited: the result must not wait for the poll in flight, which sees `finished`.
+  void poll();
+
+  try {
+    return await request<T>("POST", path, body, { "X-Progress-Id": id }, abort.signal);
+  } catch (e) {
+    if (stalled) throw new ApiError(504, "The server stopped responding. Try again.");
+    throw e;
+  } finally {
+    finished = true;
+    clearTimeout(limit);
+  }
 }
 
 // ------------------------------------------------------------------ types
@@ -152,15 +253,20 @@ export const api = {
   sessions: () => request<SessionInfo[]>("GET", "/v1/console/sessions"),
   createSession: () => request<{ session_id: string }>("POST", "/v1/console/sessions"),
   deleteSession: (id: string) => request<void>("DELETE", `/v1/console/sessions/${id}`),
-  chat: (id: string, text: string) =>
-    request<ChatReply>("POST", `/v1/console/sessions/${id}/messages`, { text }),
+  chat: (id: string, text: string, onProgress: (p: Progress) => void) =>
+    tracked<ChatReply>(`/v1/console/sessions/${id}/messages`, { text }, onProgress),
 
   startAudit: (store_url: string, journeys: string[]) =>
     request<TaskView>("POST", "/v1/audits", { store_url, journeys }),
   getAudit: (taskId: string) => request<TaskView>("GET", `/v1/audits/${taskId}`),
 
-  compilePolicy: (policy_name: string, target_rule_set: string, policy_text: string) =>
-    request<TaskView>("POST", "/v1/policies/compile", { policy_name, target_rule_set, policy_text }),
+  compilePolicy: (
+    policy_name: string,
+    target_rule_set: string,
+    policy_text: string,
+    onProgress: (p: Progress) => void,
+  ) =>
+    tracked<TaskView>("/v1/policies/compile", { policy_name, target_rule_set, policy_text }, onProgress),
   deployPolicy: (draftId: string, expected_version: string | null) =>
     request<TaskView>("POST", `/v1/policies/${draftId}/deploy`, { expected_version }),
 

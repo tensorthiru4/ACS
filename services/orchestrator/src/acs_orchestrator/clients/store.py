@@ -8,13 +8,16 @@ Collections (all server-side only; firebase/firestore.rules denies client access
   refund_decisions/{merchant_id}:{idem_key}    idempotent refund decisions
   gmail_state/{mailbox}                        last processed Gmail historyId
   draft_sales_orders/{intake_id}               read-only here; written by the messy-order agent
+  console_progress/{progress_id}               live progress of a slow console call (TTL)
 """
 
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
+
+PROGRESS_TTL = timedelta(hours=1)
 
 
 def intake_id_for(merchant_id: str, sha256: str) -> str:
@@ -38,6 +41,8 @@ class Store(Protocol):
     async def set_gmail_history(self, mailbox: str, history_id: str) -> None: ...
     async def get_draft_order(self, intake_id: str) -> dict[str, Any] | None: ...
     async def list_draft_orders(self, merchant_id: str, limit: int) -> list[dict[str, Any]]: ...
+    async def put_progress(self, progress_id: str, record: dict[str, Any]) -> None: ...
+    async def get_progress(self, progress_id: str) -> dict[str, Any] | None: ...
 
 
 class FirestoreStore:
@@ -110,6 +115,15 @@ class FirestoreStore:
         )
         return [snap.to_dict() async for snap in query.stream()]
 
+    async def put_progress(self, progress_id: str, record: dict[str, Any]) -> None:
+        now = _now()
+        await self._doc("console_progress", progress_id).set(
+            {**record, "updated_at": now, "expire_at": now + PROGRESS_TTL}
+        )
+
+    async def get_progress(self, progress_id: str) -> dict[str, Any] | None:
+        return await self._get("console_progress", progress_id)
+
 
 class MemoryStore:
     """In-process store for local development and tests."""
@@ -166,3 +180,9 @@ class MemoryStore:
                   if d.get("merchant_id") == merchant_id]  # fmt: skip
         drafts.sort(key=lambda d: d.get("created_at") or _now(), reverse=True)
         return drafts[:limit]
+
+    async def put_progress(self, progress_id: str, record: dict[str, Any]) -> None:
+        self._col("console_progress")[progress_id] = {**record, "updated_at": _now()}
+
+    async def get_progress(self, progress_id: str) -> dict[str, Any] | None:
+        return self._col("console_progress").get(progress_id)

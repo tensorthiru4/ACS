@@ -76,8 +76,14 @@ class CompilerExecutor(AgentExecutor):
             await finish("failed", f"{exc}: " + "; ".join(exc.problems[:10]))
             return
         except ModelError as exc:
-            hint = " (busy or out of quota; try again shortly)" if exc.transient else ""
-            await finish("failed", f"policy model unavailable{hint}")
+            if exc.transient:
+                await finish(
+                    "failed", "policy model unavailable (busy or out of quota; try again shortly)"
+                )
+            else:
+                # Not the model being down: say what went wrong (e.g. a reply cut off at the
+                # output-token limit) so the merchant can shorten the policy or retry.
+                await finish("failed", f"the policy model could not draft rules: {exc}")
             return
 
         audit(

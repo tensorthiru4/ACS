@@ -8,12 +8,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from google.adk.models import Gemini
+from google.adk.models import BaseLlm, Gemini
 from google.adk.runners import Runner
 from google.adk.sessions import BaseSessionService, InMemorySessionService
 from google.genai import types
 
 from .agents.context import bind_operations
+from .agents.models import FallbackLlm
 from .agents.orchestrator_agent import build_orchestrator_agent, build_shopper_agent
 from .clients.a2a_client import A2AAgentClient
 from .clients.order_desk import OrderDeskClient
@@ -66,15 +67,25 @@ def gemini_model(name: str) -> Gemini:
     )
 
 
+def agent_model(settings: Settings) -> BaseLlm:
+    """Gemini, falling back to Gemma (same key, separate quota) unless that is turned off."""
+    primary = gemini_model(settings.gemini_model)
+    if not settings.fallback_model:
+        return primary
+    return FallbackLlm(primary=primary, fallback=gemini_model(settings.fallback_model))
+
+
 def build_runners(settings: Settings, session_service: BaseSessionService) -> tuple[Runner, Runner]:
+    # One instance for both agents so a Gemini cool-down applies to both.
+    model = agent_model(settings)
     console = Runner(
         app_name=settings.app_name,
-        agent=build_orchestrator_agent(gemini_model(settings.gemini_model)),
+        agent=build_orchestrator_agent(model),
         session_service=session_service,
     )
     shopper = Runner(
         app_name=f"{settings.app_name}_shopper",
-        agent=build_shopper_agent(gemini_model(settings.gemini_model)),
+        agent=build_shopper_agent(model),
         session_service=session_service,
         auto_create_session=True,
     )
