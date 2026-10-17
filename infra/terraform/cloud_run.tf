@@ -100,7 +100,7 @@ resource "google_cloud_run_v2_service" "orchestrator" {
           value_source {
             secret_key_ref {
               secret  = google_secret_manager_secret.secret[env.value].secret_id
-              version = "latest"
+              version = lookup(local.secret_versions, env.value, "latest")
             }
           }
         }
@@ -208,7 +208,7 @@ resource "google_cloud_run_v2_service" "agent" {
           value_source {
             secret_key_ref {
               secret  = google_secret_manager_secret.secret[env.value].secret_id
-              version = "latest"
+              version = lookup(local.secret_versions, env.value, "latest")
             }
           }
         }

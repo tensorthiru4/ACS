@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import Markdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api, type Progress, type SessionInfo } from "../api";
 import { describeError, Empty, ErrorBox, PageHead, Spinner, when } from "../ui";
 
@@ -66,6 +68,18 @@ const SUGGESTIONS = [
   "Audit https://shop.example.com/ for agent readiness",
   "Draft a policy: corked wine reported within 30 days gets a refund up to ₹15,000",
 ];
+
+// Replies are model output: raw HTML in them is shown as text (react-markdown's default)
+// and links open outside the console.
+const MARKDOWN: Components = {
+  a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />,
+};
+
+/** What the conversation list calls a session, before and after the server has named it. */
+function sessionTitle(s: SessionInfo): string {
+  const first = store.load(s.session_id).find((m) => m.role === "user")?.text;
+  return s.title || first?.replace(/\s+/g, " ").trim().slice(0, 48) || "New conversation";
+}
 
 /** Folds one progress event into the pending turn's step list. */
 function advance(pending: Pending, event: Progress): Pending {
@@ -206,6 +220,8 @@ export default function Chat() {
         delete rest[sid];
         return rest;
       });
+      // Picks up the title the server gave the conversation and its new update time.
+      void refresh();
     }
   }
 
@@ -238,9 +254,10 @@ export default function Chat() {
                 tabIndex={0}
                 onKeyDown={(e) => e.key === "Enter" && setActive(s.session_id)}
               >
-                <span>
-                  {store.load(s.session_id).find((m) => m.role === "user")?.text.slice(0, 28) || "Conversation"}
-                  <br />
+                <span className="session-text">
+                  <span className="session-title" title={sessionTitle(s)}>
+                    {sessionTitle(s)}
+                  </span>
                   <span className="muted small">
                     {pending[s.session_id] ? <><Spinner /> working…</> : when(s.last_update_time)}
                   </span>
@@ -278,7 +295,15 @@ export default function Chat() {
             )}
             {messages.map((m, i) => (
               <div key={i} className={`bubble ${m.role}`}>
-                {m.text}
+                {m.role === "assistant" ? (
+                  <div className="markdown">
+                    <Markdown remarkPlugins={[remarkGfm]} components={MARKDOWN}>
+                      {m.text}
+                    </Markdown>
+                  </div>
+                ) : (
+                  m.text
+                )}
                 {((m.tools && m.tools.length > 0) || m.model) && (
                   <div className="tools">
                     {m.tools?.map((t, j) => (

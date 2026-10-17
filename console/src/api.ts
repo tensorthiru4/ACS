@@ -182,6 +182,8 @@ export interface ChatReply {
 export interface SessionInfo {
   session_id: string;
   last_update_time: number;
+  /** Named from the conversation's first message; absent until it has one. */
+  title?: string | null;
 }
 export interface TaskView {
   task_id: string | null;
