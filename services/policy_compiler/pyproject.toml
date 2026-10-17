@@ -1,0 +1,49 @@
+[project]
+name = "acs-policy-compiler"
+version = "0.1.0"
+description = "ACS Policy-as-Code Compiler: Gemini Flash turns merchant policy text into validated CEL rule sets (A2A)."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "acs-common[rules,gemini,a2a,web]",
+    "a2a-sdk[http-server]>=1.2,<2",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "google-cloud-firestore>=2.19",
+]
+
+[tool.uv.sources]
+acs-common = { path = "../../libs/acs_common", editable = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/acs_policy_compiler"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "S", "UP", "ASYNC"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S"]

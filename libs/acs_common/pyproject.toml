@@ -1,0 +1,56 @@
+[project]
+name = "acs-common"
+version = "0.1.0"
+description = "Shared building blocks for the ACS downstream agents: logging, service auth, Gemini, A2A task persistence and the CEL rules core."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "pydantic>=2.9",
+    "httpx>=0.27",
+    "google-auth[requests]>=2.35",
+    "cachetools>=5.5",
+]
+
+[project.optional-dependencies]
+# CEL rules core (rule engine + policy compiler).
+rules = ["common-expression-language>=0.10,<0.11"]
+# Gemini via Google AI Studio.
+gemini = ["google-genai>=2.30,<3"]
+# Firestore-backed A2A task store.
+a2a = ["a2a-sdk[http-server]>=1.2,<2", "google-cloud-firestore>=2.19"]
+web = ["fastapi>=0.115"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/acs_common"]
+
+[tool.uv]
+# Tests exercise every optional module.
+default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "S", "UP", "ASYNC"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S"]

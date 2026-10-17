@@ -1,0 +1,11 @@
+rules_version = '2';
+
+// Raw POs and audio are written by the Messy-Order-to-ERP agent (service account / IAM).
+// No client SDK access.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

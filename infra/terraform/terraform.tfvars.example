@@ -1,0 +1,30 @@
+project_id         = "my-acs-project"
+region             = "us-central1"
+environment        = "prod"
+orchestrator_image = "us-central1-docker.pkg.dev/my-acs-project/acs/orchestrator@sha256:<digest>"
+
+# Second apply: paste the `gateway_url` output (or your custom domain) here.
+public_base_url = ""
+
+console_origins = ["https://my-acs-project.web.app", "https://my-acs-project.firebaseapp.com"]
+
+# Fill in as each downstream agent is built.
+agent_images = {
+  # auditor         = "us-central1-docker.pkg.dev/my-acs-project/acs/auditor@sha256:..."
+  # policy_compiler = "..."
+  # rule_engine     = "..."
+  # messy_order     = "..."
+}
+
+gmail = {
+  enabled                = false
+  mailbox                = "orders@merchant.example"
+  merchant_id            = "merchant-1"
+  allowed_sender_domains = ["buyer-one.example", "buyer-two.example"]
+}
+
+billing_account = "" # e.g. "0123AB-4567CD-89EF01" to enable the $1 budget alert
+
+# Fallback model when Gemini is out of quota (free tier: ~20 requests/day per model).
+# Uses the same gemini-api-key; set to "" to turn it off.
+fallback_model = "gemma-4-31b-it"

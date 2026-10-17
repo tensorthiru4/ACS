@@ -1,0 +1,59 @@
+[project]
+name = "acs-orchestrator"
+version = "0.1.0"
+description = "ACS Orchestrator: Google ADK agent on Cloud Run that routes channel traffic to the Autonomous Commerce Suite agents."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "google-adk[a2a]>=2.12,<3",
+    "a2a-sdk[http-server]>=1.2,<2",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "httpx>=0.27",
+    "google-auth>=2.35",
+    "google-cloud-firestore>=2.19",
+    "google-cloud-pubsub>=2.26",
+    "google-api-python-client>=2.150",
+    "firebase-admin>=6.6",
+    "python-multipart>=0.0.18",
+    "cachetools>=5.5",
+]
+
+[project.scripts]
+acs-admin = "acs_orchestrator.admin_cli:main"
+
+[dependency-groups]
+admin = [
+    "google-cloud-secret-manager>=2.20",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/acs_orchestrator"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "S", "UP", "ASYNC"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S"]
