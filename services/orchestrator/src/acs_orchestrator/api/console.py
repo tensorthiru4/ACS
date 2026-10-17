@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/console", tags=["console"])
 
 MAX_SESSIONS_LISTED = 50
+TITLE_STATE_KEY = "acs:title"
+MAX_TITLE_CHARS = 48
+
+
+def conversation_title(text: str) -> str:
+    """A short name for a conversation, taken from its first message."""
+    words = " ".join(text.split())
+    if len(words) <= MAX_TITLE_CHARS:
+        return words
+    cut = words[:MAX_TITLE_CHARS].rsplit(" ", 1)[0] or words[:MAX_TITLE_CHARS]
+    return cut.rstrip(" ,.;:-") + "…"
 
 
 @router.post("/sessions", status_code=201)
@@ -57,7 +68,11 @@ async def list_sessions(
     )
     sessions = sorted(resp.sessions, key=lambda s: s.last_update_time, reverse=True)
     return [
-        SessionInfo(session_id=s.id, last_update_time=s.last_update_time)
+        SessionInfo(
+            session_id=s.id,
+            last_update_time=s.last_update_time,
+            title=s.state.get(TITLE_STATE_KEY) or None,
+        )
         for s in sessions[:MAX_SESSIONS_LISTED]
     ]
 
@@ -105,12 +120,14 @@ async def send_message(
     )
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    # Named once, from the first message, so the list can tell conversations apart.
+    title = None if session.state.get(TITLE_STATE_KEY) else conversation_title(text)
 
     return await live_progress.run_tracked(
         c.ops.store,
         principal.adk_user_id,
         live_progress.progress_id(request),
-        lambda emit: _run_turn(c, principal, session_id, text, emit),
+        lambda emit: _run_turn(c, principal, session_id, text, emit, title),
     )
 
 
@@ -128,10 +145,19 @@ def _tool_failed(response: Any) -> bool:
 
 
 async def _run_turn(
-    c: Container, principal: Principal, session_id: str, text: str, emit: Emit
+    c: Container,
+    principal: Principal,
+    session_id: str,
+    text: str,
+    emit: Emit,
+    title: str | None = None,
 ) -> ChatReply:
     reply: list[str] = []
     tool_calls: list[str] = []
+    # Refresh the bound principal every turn so role changes apply immediately.
+    state_delta: dict[str, Any] = {PRINCIPAL_STATE_KEY: principal.model_dump(mode="json")}
+    if title:
+        state_delta[TITLE_STATE_KEY] = title
     message = types.Content(role="user", parts=[types.Part(text=text)])
     emit({"type": "status", "text": "Thinking"})
     try:
@@ -141,8 +167,7 @@ async def _run_turn(
                     user_id=principal.adk_user_id,
                     session_id=session_id,
                     new_message=message,
-                    # Refresh the bound principal every turn so role changes apply immediately.
-                    state_delta={PRINCIPAL_STATE_KEY: principal.model_dump(mode="json")},
+                    state_delta=state_delta,
                 ):
                     for fc in event.get_function_calls():
                         if fc.name:

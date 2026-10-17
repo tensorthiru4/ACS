@@ -156,3 +156,4 @@ class ChatReply(BaseModel):
 class SessionInfo(BaseModel):
     session_id: str
     last_update_time: float
+    title: str | None = None

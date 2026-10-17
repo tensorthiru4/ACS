@@ -5,6 +5,7 @@ from __future__ import annotations
 from conftest import ADMIN, AGENT, ANALYST, VIEWER
 from google.genai import errors as genai_errors
 
+from acs_orchestrator.api.console import conversation_title
 from acs_orchestrator.container import gemini_model
 
 REFUND_CALL = {
@@ -82,6 +83,28 @@ def test_sessions_are_private_to_their_owner(harness):
     assert r.status_code == 404
     listed = harness.client.get("/v1/console/sessions", headers=ANALYST).json()
     assert sid not in [s["session_id"] for s in listed]
+
+
+def test_sessions_are_named_from_their_first_message(harness):
+    sid = _session(harness.client, ANALYST)
+    listed = harness.client.get("/v1/console/sessions", headers=ANALYST).json()
+    assert next(s for s in listed if s["session_id"] == sid)["title"] is None
+
+    harness.llm.script = ["Sure.", "Done."]
+    first = "Can you   audit https://shop.example.com/ for agent readiness and summarise it?"
+    for text in (first, "something else"):
+        r = harness.client.post(
+            f"/v1/console/sessions/{sid}/messages", json={"text": text}, headers=ANALYST
+        )
+        assert r.status_code == 200, r.text
+    listed = harness.client.get("/v1/console/sessions", headers=ANALYST).json()
+    title = next(s for s in listed if s["session_id"] == sid)["title"]
+    assert title == "Can you audit https://shop.example.com/ for…"
+
+
+def test_conversation_title_keeps_short_messages_whole():
+    assert conversation_title("  Refund\norder 1001 ") == "Refund order 1001"
+    assert len(conversation_title("x" * 200)) == 49
 
 
 def test_audit_results_are_wrapped_as_untrusted(harness):
