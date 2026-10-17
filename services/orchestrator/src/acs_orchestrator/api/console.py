@@ -189,10 +189,14 @@ async def _run_turn(
                             p.text for p in event.content.parts if p.text and not p.thought
                         )
     except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="the assistant timed out") from exc
+        raise HTTPException(
+            status_code=504,
+            detail="The assistant is taking longer than expected. Please try again shortly.",
+        ) from exc
 
     return ChatReply(
         session_id=session_id,
-        reply="\n".join(reply).strip() or "(no response)",
+        reply="\n".join(reply).strip()
+        or "I wasn't able to prepare a response just now. Please try again.",
         tool_calls=tool_calls,
     )

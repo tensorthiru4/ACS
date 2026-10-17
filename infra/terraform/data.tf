@@ -273,6 +273,21 @@ locals {
   }
 }
 
+# Cloud Run resolves "latest" only when an instance starts, so running services keep an
+# old Gemini key after a new version is added. Pinning to the newest enabled version
+# makes the next apply roll every service onto it. Only version metadata is read here,
+# never the key itself.
+data "google_secret_manager_secret_version" "gemini_api_key" {
+  secret            = google_secret_manager_secret.secret["gemini-api-key"].secret_id
+  fetch_secret_data = false
+}
+
+locals {
+  secret_versions = {
+    "gemini-api-key" = data.google_secret_manager_secret_version.gemini_api_key.version
+  }
+}
+
 resource "google_secret_manager_secret" "secret" {
   for_each  = local.secrets
   secret_id = each.key
